@@ -10,6 +10,7 @@ static class Program
     {
         if (args.Length >= 2 && args[0] == "--render") return RenderToFile(args);
         if (args.Contains("--selftest")) return SelfTest.Run();
+        if (args.Contains("--sessions")) return ListSessions();
         if (args.Contains("--steamvr-test")) return SteamVrTest();
 
         using var single = new Mutex(true, "LyrenneVR.Host.Single", out bool first);
@@ -73,6 +74,19 @@ static class Program
             Thread.Sleep(100);
         }
         return problems.Count == 0 && frame?.Head != null ? 0 : 1;
+    }
+
+    /// <summary>--sessions: every media session Windows exposes, which one the app would follow, and why.</summary>
+    static int ListSessions()
+    {
+        var mgr = Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager.RequestAsync().AsTask().Result;
+        foreach (var s in mgr.GetSessions())
+        {
+            var p = s.TryGetMediaPropertiesAsync().AsTask().Result;
+            Console.WriteLine($"{s.SourceAppUserModelId} | {p?.Artist} - {p?.Title} | {s.GetPlaybackInfo().PlaybackStatus}");
+        }
+        Console.WriteLine("current: " + mgr.GetCurrentSession()?.SourceAppUserModelId);
+        return 0;
     }
 
     /// <summary>--render out.png [--demo] [--pointer x,y[,pressed]]: draws one frame without any VR.</summary>

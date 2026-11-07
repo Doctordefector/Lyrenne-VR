@@ -34,6 +34,8 @@ public sealed class Media : IDisposable
     readonly Settings _settings;
     GlobalSystemMediaTransportControlsSessionManager? _manager;
     GlobalSystemMediaTransportControlsSession? _session;
+    System.Threading.Timer? _recheck;
+    int _picking;
     readonly object _lock = new();
 
     string _title = "", _artist = "", _album = "";
@@ -65,6 +67,9 @@ public sealed class Media : IDisposable
             _manager.SessionsChanged += (_, _) => _ = PickSessionAsync();
             _manager.CurrentSessionChanged += (_, _) => _ = PickSessionAsync();
             await PickSessionAsync();
+            // Windows' change events do not always arrive (seen live: Lyrenne opened after the
+            // host and was never picked up), so look again every few seconds as well.
+            _recheck = new System.Threading.Timer(_ => _ = PickSessionAsync(), null, 3000, 3000);
         }
         catch (Exception e)
         {
@@ -73,6 +78,19 @@ public sealed class Media : IDisposable
     }
 
     async Task PickSessionAsync()
+    {
+        if (_manager == null || Interlocked.Exchange(ref _picking, 1) == 1) return;
+        try
+        {
+            await PickSessionCoreAsync();
+        }
+        finally
+        {
+            Volatile.Write(ref _picking, 0);
+        }
+    }
+
+    async Task PickSessionCoreAsync()
     {
         if (_manager == null) return;
         GlobalSystemMediaTransportControlsSession? pick = null;
@@ -88,7 +106,7 @@ public sealed class Media : IDisposable
             Log.Write($"listing media sessions failed: {e.Message}");
         }
 
-        if (ReferenceEquals(pick, _session)) return;
+        if (pick?.SourceAppUserModelId == _session?.SourceAppUserModelId && (pick == null) == (_session == null)) return;
         if (_session != null)
         {
             _session.MediaPropertiesChanged -= OnMediaProperties;
@@ -293,6 +311,7 @@ public sealed class Media : IDisposable
 
     public void Dispose()
     {
+        _recheck?.Dispose();
         if (_session != null)
         {
             _session.MediaPropertiesChanged -= OnMediaProperties;
