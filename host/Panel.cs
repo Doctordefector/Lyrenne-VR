@@ -60,6 +60,9 @@ public sealed class Panel
 
     public bool Interacting => _pressed || _hover != null;
 
+    /// <summary>What is driving the pointer, for the log: "touch", "trigger" or "mouse".</summary>
+    public string InputKind { get; set; } = "mouse";
+
     /// <summary>
     /// Feeds the pointer. <paramref name="at"/> is null when nothing hovers. <paramref name="depth"/> is
     /// 0 when touching and 1 at the edge of the hover zone; it only shapes the cursor.
@@ -76,6 +79,7 @@ public sealed class Panel
             if (hit.Id != Control.None)
             {
                 Haptic?.Invoke(0.35f, 0.02f);
+                Log.Write($"click {hit.Id} by {InputKind}");
                 if (!hit.Drag) Fire(hit.Id);
                 else _dragValue = DragValue(hit, down);
             }

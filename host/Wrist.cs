@@ -47,6 +47,7 @@ public sealed class Wrist
         Pose? panel = watch is { } g ? g.Compose(PanelOffset) : null;
 
         UpdateVisibility(f.Head, panel);
+        TrackLegibility(f.Head, panel);
         UpdateTouch(f, panel);
     }
 
@@ -86,6 +87,13 @@ public sealed class Wrist
         }
         if (want != _visible)
         {
+            if (!want && _shownSince >= 0)
+            {
+                float avg = MathF.Atan2(_tiltSin, _tiltCos) * 180 / MathF.PI;
+                Log.Write($"panel shown {(now - _shownSince) / 1000f:0.0} s, text tilt in view {avg:+0;-0} deg (0 = upright, + = counterclockwise)");
+            }
+            _shownSince = want ? now : -1;
+            _tiltSin = _tiltCos = 0;
             _visible = want;
             _glanceSince = _awaySince = -1;
             if (!want) Release();
@@ -104,6 +112,27 @@ public sealed class Wrist
         return Vector3.Dot(head.Forward, -toHead) >= MathF.Cos(lookDeg * MathF.PI / 180f);
     }
 
+    long _shownSince = -1;
+    float _tiltSin, _tiltCos;
+
+    /// <summary>
+    /// Accumulates how far the panel's text is rotated as the user sees it, logged when the panel
+    /// closes. A field check on the wrist orientation that needs nothing from the user.
+    /// </summary>
+    void TrackLegibility(Pose? head, Pose? panel)
+    {
+        if (!_visible || head is not { } h || panel is not { } p) return;
+        Vector3 view = Vector3.Normalize(p.Position - h.Position);
+        Vector3 Flat(Vector3 v) => v - view * Vector3.Dot(v, view);
+        Vector3 headUp = Flat(h.Up), panelUp = Flat(p.Up);
+        if (headUp.LengthSquared() < 1e-6f || panelUp.LengthSquared() < 1e-6f) return;
+        headUp = Vector3.Normalize(headUp);
+        panelUp = Vector3.Normalize(panelUp);
+        float angle = MathF.Atan2(Vector3.Dot(Vector3.Cross(headUp, panelUp), -view), Vector3.Dot(headUp, panelUp));
+        _tiltSin += MathF.Sin(angle);
+        _tiltCos += MathF.Cos(angle);
+    }
+
     void UpdateTouch(TrackingFrame f, Pose? panel)
     {
         if (!_visible || panel is not { } p || f.Aim(_settings.PokeHand) is not { } aim)
@@ -119,6 +148,7 @@ public sealed class Wrist
         if (tipOver && tip.Z <= HoverDepth && tip.Z >= PassThrough && !_triggerDown)
         {
             Pointing = false;
+            _panel.InputKind = "touch";
             if (!_touching && tip.Z <= PressDepth) _touching = true;
             else if (_touching && tip.Z >= ReleaseDepth) _touching = false;
             _panel.Pointer(ToPixel(tip, hw, hh), Math.Clamp(tip.Z / HoverDepth, 0, 1), _touching);
@@ -151,6 +181,7 @@ public sealed class Wrist
             // A trigger already held when the ray arrives (firing in the game) must be let go first.
             _armed = trigger < TriggerUp;
         }
+        _panel.InputKind = "trigger";
         if (!_armed && trigger < TriggerUp) _armed = true;
         if (_armed && !_triggerDown && trigger >= TriggerDown) _triggerDown = true;
         else if (_triggerDown && trigger < TriggerUp) _triggerDown = false;
