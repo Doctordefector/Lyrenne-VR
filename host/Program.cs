@@ -10,6 +10,7 @@ static class Program
     {
         if (args.Length >= 2 && args[0] == "--render") return RenderToFile(args);
         if (args.Contains("--selftest")) return SelfTest.Run();
+        if (args.Contains("--steamvr-test")) return SteamVrTest();
 
         using var single = new Mutex(true, "LyrenneVR.Host.Single", out bool first);
         if (!first)
@@ -29,6 +30,41 @@ static class Program
         Application.Run();
         settings.Save();
         return 0;
+    }
+
+    /// <summary>
+    /// --steamvr-test: with SteamVR already running (its null driver is enough), connects the real
+    /// overlay backend, shows the demo panel in front of the headset and checks SteamVR's view of it.
+    /// </summary>
+    static int SteamVrTest()
+    {
+        var settings = new Settings { Lyrics = false };
+        var panel = new Panel(new Media(settings), new Volume(), new Lyrics(), settings);
+        using var steam = new SteamVr(settings) { RegisterWithSteamVr = false };
+        long until = Environment.TickCount64 + 30000;
+        while (!steam.EnsureConnected() && Environment.TickCount64 < until) Thread.Sleep(500);
+        if (!steam.Connected)
+        {
+            Console.WriteLine("FAIL could not connect to SteamVR (see host.log)");
+            return 1;
+        }
+        Console.WriteLine("ok   connected to SteamVR as an overlay app");
+        var frame = steam.Poll();
+        Console.WriteLine($"{(frame?.Head != null ? "ok  " : "FAIL")} headset pose readable");
+        Console.WriteLine($"     controllers: left grip {(frame?.LeftGrip != null ? "yes" : "no")}, right aim {(frame?.RightAim != null ? "yes" : "no")}");
+
+        using var bmp = new SKBitmap(new SKImageInfo(Panel.Width, Panel.Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+        using (var c = new SKCanvas(bmp)) panel.Render(c, Demo.Track());
+        var problems = steam.SelfCheck(bmp.GetPixelSpan());
+        foreach (var p in problems) Console.WriteLine($"FAIL {p}");
+        if (problems.Count == 0) Console.WriteLine("ok   overlay texture uploaded, attached and visible");
+
+        for (int i = 0; i < 40; i++)
+        {
+            steam.Poll();
+            Thread.Sleep(100);
+        }
+        return problems.Count == 0 && frame?.Head != null ? 0 : 1;
     }
 
     /// <summary>--render out.png [--demo] [--pointer x,y[,pressed]]: draws one frame without any VR.</summary>

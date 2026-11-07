@@ -36,6 +36,9 @@ public sealed class SteamVr : IDisposable
 
     public bool Connected => _connected;
 
+    /// <summary>Off for tests, so a test run never adds itself to the user's SteamVR startup list.</summary>
+    public bool RegisterWithSteamVr { get; init; } = true;
+
     static bool SteamVrRunning()
     {
         var p = Process.GetProcessesByName("vrserver");
@@ -84,7 +87,7 @@ public sealed class SteamVr : IDisposable
             OpenVR.Overlay.SetOverlayWidthInMeters(_overlay, _settings.PanelWidthM);
             OpenVR.Overlay.SetOverlaySortOrder(_overlay, 100);
 
-            RegisterManifest(dir);
+            if (RegisterWithSteamVr) RegisterManifest(dir);
             _connected = true;
             _shown = false;
             Log.Write("connected to SteamVR");
@@ -244,6 +247,28 @@ public sealed class SteamVr : IDisposable
         var tex = new Texture_t { handle = _texture!.NativePointer, eType = ETextureType.DirectX, eColorSpace = EColorSpace.Gamma };
         var err = OpenVR.Overlay.SetOverlayTexture(_overlay, ref tex);
         if (err != EVROverlayError.None) Log.Write($"SetOverlayTexture: {err}");
+    }
+
+    /// <summary>
+    /// Test hook for --steamvr-test: shows a frame 60 cm in front of the headset and reports what
+    /// SteamVR says about the overlay. Works with no controllers (SteamVR's null driver).
+    /// </summary>
+    public List<string> SelfCheck(ReadOnlySpan<byte> premulBgra)
+    {
+        var problems = new List<string>();
+        Upload(premulBgra);
+        var inFront = new Pose(new Vector3(0, 0, -0.6f), Quaternion.Identity);
+        var m = ToMatrix(inFront);
+        var err = OpenVR.Overlay.SetOverlayTransformTrackedDeviceRelative(_overlay, OpenVR.k_unTrackedDeviceIndex_Hmd, ref m);
+        if (err != EVROverlayError.None) problems.Add($"transform: {err}");
+        OpenVR.Overlay.SetOverlayWidthInMeters(_overlay, 0.5f);
+        err = OpenVR.Overlay.ShowOverlay(_overlay);
+        if (err != EVROverlayError.None) problems.Add($"show: {err}");
+        uint w = 0, h = 0;
+        err = OpenVR.Overlay.GetOverlayTextureSize(_overlay, ref w, ref h);
+        if (err != EVROverlayError.None || w != Panel.Width || h != Panel.Height) problems.Add($"texture size {w}x{h} ({err})");
+        if (!OpenVR.Overlay.IsOverlayVisible(_overlay)) problems.Add("overlay not visible");
+        return problems;
     }
 
     public void Haptic(Hand hand, float amplitude, float seconds)

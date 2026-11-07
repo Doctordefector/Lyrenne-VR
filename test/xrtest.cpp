@@ -70,8 +70,51 @@ static void WriteBmp(const char* path, const uint8_t* px, int w, int h, bool rgb
     fclose(f);
 }
 
+// xrtest.exe real: the machine's actual runtime and implicit layers, ours included through
+// XR_API_LAYER_PATH. Checks the layer loads, coexists with the others and builds its action set.
+static int RealRuntime() {
+    wchar_t exe[MAX_PATH];
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    std::wstring dir(exe);
+    dir = dir.substr(0, dir.find_last_of(L'\\'));
+    SetEnvironmentVariableW(L"XR_API_LAYER_PATH", (dir + L"\\..\\layer").c_str());
+    SetEnvironmentVariableW(L"XR_ENABLE_API_LAYERS", L"XR_APILAYER_LYRENNE_wrist_player");
+
+    uint32_t count = 0;
+    xrEnumerateApiLayerProperties(0, &count, nullptr);
+    std::vector<XrApiLayerProperties> layers(count, {XR_TYPE_API_LAYER_PROPERTIES});
+    xrEnumerateApiLayerProperties(count, &count, layers.data());
+    for (auto& l : layers) printf("layer available: %s\n", l.layerName);
+
+    const char* ext = XR_KHR_D3D11_ENABLE_EXTENSION_NAME;
+    XrInstanceCreateInfo ici{XR_TYPE_INSTANCE_CREATE_INFO};
+    strcpy_s(ici.applicationInfo.applicationName, "xrtest-real");
+    ici.applicationInfo.apiVersion = XR_API_VERSION_1_0;
+    ici.enabledExtensionCount = 1;
+    ici.enabledExtensionNames = &ext;
+    XrInstance instance;
+    CHECK(xrCreateInstance(&ici, &instance));
+    XrInstanceProperties props{XR_TYPE_INSTANCE_PROPERTIES};
+    xrGetInstanceProperties(instance, &props);
+    printf("runtime: %s\n", props.runtimeName);
+
+    XrPath p;
+    CHECK(xrStringToPath(instance, "/user/hand/left", &p));
+    XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
+    sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+    XrSystemId system;
+    XrResult r = xrGetSystem(instance, &sgi, &system);
+    printf("xrGetSystem: %d%s\n", r, r == XR_ERROR_FORM_FACTOR_UNAVAILABLE ? " (no headset connected, expected here)" : "");
+    CHECK(xrDestroyInstance(instance));
+    printf("instance created and destroyed cleanly with the layer loaded\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
-    bool d3d12 = argc > 1 && strcmp(argv[1], "d3d12") == 0;
+    if (argc > 1 && strcmp(argv[1], "real") == 0) return RealRuntime();
+    bool d3d12 = argc > 1 && strstr(argv[1], "d3d12") != nullptr;
+    // real-d3d11 / real-d3d12: a full session on the machine's actual runtime with all its layers.
+    bool real = argc > 1 && strncmp(argv[1], "real-", 5) == 0;
     const char* out = argc > 2 ? argv[2] : "xrtest.bmp";
 
     HMODULE mock = GetModuleHandleW(nullptr);
@@ -80,16 +123,18 @@ int main(int argc, char** argv) {
         GetModuleFileNameW(nullptr, exe, MAX_PATH);
         std::wstring dir(exe);
         dir = dir.substr(0, dir.find_last_of(L'\\'));
-        SetEnvironmentVariableW(L"XR_RUNTIME_JSON", (dir + L"\\mock_runtime.json").c_str());
+        if (!real) SetEnvironmentVariableW(L"XR_RUNTIME_JSON", (dir + L"\\mock_runtime.json").c_str());
         SetEnvironmentVariableW(L"XR_API_LAYER_PATH", (dir + L"\\..\\layer").c_str());
         SetEnvironmentVariableW(L"XR_ENABLE_API_LAYERS", L"XR_APILAYER_LYRENNE_wrist_player");
         // Keep other installed implicit layers out of this test, and keep ours from loading twice
         // in case it is also registered as an implicit layer on this machine.
-        SetEnvironmentVariableW(L"DISABLE_XR_APILAYER_VIRTUALDESKTOP_OCULUS_COMPATIBILITY", L"1");
-        SetEnvironmentVariableW(L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR", L"1");
-        mock = LoadLibraryW((dir + L"\\mock_runtime.dll").c_str());
+        if (!real) {
+            SetEnvironmentVariableW(L"DISABLE_XR_APILAYER_VIRTUALDESKTOP_OCULUS_COMPATIBILITY", L"1");
+            SetEnvironmentVariableW(L"DISABLE_XR_APILAYER_DIENERTECH_VECTORXR", L"1");
+        }
+        if (!real) mock = LoadLibraryW((dir + L"\\mock_runtime.dll").c_str());
     }
-    if (!mock) {
+    if (!mock && !real) {
         printf("FAIL cannot load mock_runtime.dll\n");
         return 1;
     }
@@ -173,6 +218,29 @@ int main(int argc, char** argv) {
     attach.actionSets = &gameSet;
     CHECK(xrAttachSessionActionSets(session, &attach));
 
+    if (real) {
+        // A real runtime only allows xrBeginSession once it reports READY.
+        bool ready = false;
+        for (int i = 0; i < 1500 && !ready; i++) {
+            XrEventDataBuffer ev{XR_TYPE_EVENT_DATA_BUFFER};
+            while (xrPollEvent(instance, &ev) == XR_SUCCESS) {
+                if (ev.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+                    auto st = reinterpret_cast<XrEventDataSessionStateChanged*>(&ev)->state;
+                    printf("session state %d\n", st);
+                    if (st == XR_SESSION_STATE_READY) ready = true;
+                }
+                ev = {XR_TYPE_EVENT_DATA_BUFFER};
+            }
+            Sleep(10);
+        }
+        if (!ready) {
+            printf("runtime never reported READY (headset not streaming?), inconclusive\n");
+            xrDestroySession(session);
+            xrDestroyInstance(instance);
+            return 2;
+        }
+    }
+
     XrSessionBeginInfo sbi{XR_TYPE_SESSION_BEGIN_INFO};
     sbi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
     CHECK(xrBeginSession(session, &sbi));
@@ -197,6 +265,27 @@ int main(int argc, char** argv) {
         fe.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
         CHECK(xrEndFrame(session, &fe));
         Sleep(11);
+    }
+
+    if (real) {
+        // What the layer published to the host from inside the real runtime.
+        HANDLE m = OpenFileMappingW(FILE_MAP_READ, FALSE, L"Local\\LyrenneVR.Bridge.v1");
+        auto* b = m ? static_cast<const uint8_t*>(MapViewOfFile(m, FILE_MAP_READ, 0, 0, 512)) : nullptr;
+        if (!b) {
+            printf("FAIL host bridge not found, is LyrenneVR.exe running?\n");
+            return 1;
+        }
+        uint32_t flags = *reinterpret_cast<const uint32_t*>(b + 100);
+        uint32_t visible = *reinterpret_cast<const uint32_t*>(b + 28);
+        printf("layer reported to host: runtime '%s', app '%s', pose flags 0x%x, panel visible %u\n",
+               reinterpret_cast<const char*>(b + 248), reinterpret_cast<const char*>(b + 312), flags, visible);
+        Expect((flags & 1) != 0, "head pose tracked through the layer");
+        Expect(strcmp(reinterpret_cast<const char*>(b + 312), "xrtest") == 0, "host sees this game");
+        printf("controller poses: left grip %s, right aim %s (need controllers awake)\n", (flags & 2) ? "yes" : "no", (flags & 16) ? "yes" : "no");
+        xrDestroySession(session);
+        xrDestroyInstance(instance);
+        printf(failures ? "\n%d check(s) failed\n" : "\nall checks passed\n", failures);
+        return failures ? 1 : 0;
     }
 
     int v[10] = {};
