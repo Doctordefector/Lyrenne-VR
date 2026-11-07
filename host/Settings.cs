@@ -46,6 +46,9 @@ public sealed class Settings
     /// <summary>Overrides <see cref="Show"/> for this run only (--always on the command line, used by tests).</summary>
     [JsonIgnore] public ShowMode? ForceShow { get; set; }
 
+    /// <summary>--capture: keep the trigger capture on, so tests can see what the runtime does with it.</summary>
+    [JsonIgnore] public bool ForceCapture { get; set; }
+
     [JsonIgnore] public Hand PokeHand => WatchHand == Hand.Left ? Hand.Right : Hand.Left;
 
     /// <summary>Panel pose relative to the watch hand's OpenXR grip pose.</summary>

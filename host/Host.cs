@@ -121,7 +121,7 @@ public sealed class Host : IDisposable
         var anchor = Settings.WatchHand == Hand.Left ? Anchor.LeftGrip : Anchor.RightGrip;
         if (changed) _bridge.PublishFrame(_bitmap.GetPixelSpan(), Panel.Width, Panel.Height);
         _bridge.SetPanel(visible && Source == Source.OpenXr, anchor, _wrist.PanelOffset, _wrist.PanelWidth);
-        _bridge.SetCapture(visible && _wrist.Pointing);
+        _bridge.SetCapture((visible && _wrist.Pointing) || Settings.ForceCapture);
         _steam.Present(visible && Source == Source.SteamVr, _wrist.PanelOffset, _wrist.PanelWidth, _bitmap.GetPixelSpan(), changed);
     }
 

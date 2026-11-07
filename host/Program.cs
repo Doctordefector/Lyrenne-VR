@@ -22,6 +22,7 @@ static class Program
         ApplicationConfiguration.Initialize();
         var settings = Settings.Load();
         if (args.Contains("--always")) settings.ForceShow = ShowMode.Always;
+        if (args.Contains("--capture")) settings.ForceCapture = true;
         using var host = new Host(settings);
         host.Start();
         Log.Write($"LyrenneVR started ({string.Join(' ', args)})");

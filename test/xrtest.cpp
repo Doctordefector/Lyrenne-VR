@@ -168,14 +168,22 @@ int main(int argc, char** argv) {
     aci.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
     XrAction jump;
     CHECK(xrCreateAction(gameSet, &aci, &jump));
+    // The game's gun, on the right trigger: the input the panel borrows while it is pointed at.
+    strcpy_s(aci.actionName, "fire");
+    strcpy_s(aci.localizedActionName, "Fire");
+    aci.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    XrAction fire;
+    CHECK(xrCreateAction(gameSet, &aci, &fire));
     XrPath profile, aClick;
     xrStringToPath(instance, "/interaction_profiles/oculus/touch_controller", &profile);
     xrStringToPath(instance, "/user/hand/right/input/a/click", &aClick);
-    XrActionSuggestedBinding binding{jump, aClick};
+    XrPath triggerPath;
+    xrStringToPath(instance, "/user/hand/right/input/trigger/value", &triggerPath);
+    XrActionSuggestedBinding binding[2] = {{jump, aClick}, {fire, triggerPath}};
     XrInteractionProfileSuggestedBinding sb{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     sb.interactionProfile = profile;
-    sb.countSuggestedBindings = 1;
-    sb.suggestedBindings = &binding;
+    sb.countSuggestedBindings = 2;
+    sb.suggestedBindings = binding;
     CHECK(xrSuggestInteractionProfileBindings(instance, &sb));
 
     XrSessionCreateInfo sci{XR_TYPE_SESSION_CREATE_INFO};
@@ -248,6 +256,7 @@ int main(int argc, char** argv) {
     sbi.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
     CHECK(xrBeginSession(session, &sbi));
 
+    XrBool32 fireActiveFirst = XR_FALSE, fireActiveLast = XR_FALSE;
     // Run frames until the host has had time to see us, show the panel and publish a frame.
     for (int i = 0; i < 240; i++) {
         XrActiveActionSet active{gameSet, XR_NULL_PATH};
@@ -259,6 +268,11 @@ int main(int argc, char** argv) {
         gi.action = jump;
         XrActionStateBoolean st{XR_TYPE_ACTION_STATE_BOOLEAN};
         CHECK(xrGetActionStateBoolean(session, &gi, &st));
+        gi.action = fire;
+        XrActionStateFloat fireState{XR_TYPE_ACTION_STATE_FLOAT};
+        CHECK(xrGetActionStateFloat(session, &gi, &fireState));
+        if (i == 0) fireActiveFirst = fireState.isActive;
+        fireActiveLast = fireState.isActive;
 
         XrFrameState fs{XR_TYPE_FRAME_STATE};
         CHECK(xrWaitFrame(session, nullptr, &fs));
@@ -284,6 +298,10 @@ int main(int argc, char** argv) {
                reinterpret_cast<const char*>(b + 248), reinterpret_cast<const char*>(b + 312), flags, visible);
         Expect((flags & 1) != 0, "head pose tracked through the layer");
         Expect(strcmp(reinterpret_cast<const char*>(b + 312), "xrtest") == 0, "host sees this game");
+        uint32_t capture = *reinterpret_cast<const uint32_t*>(b + 384);
+        printf("game's fire action (right trigger): active on frame 1 %d, active on last frame %d; host capture flag %u\n",
+               fireActiveFirst, fireActiveLast, capture);
+        if (capture) Expect(!fireActiveLast, "runtime hands the trigger to the panel instead of the game while capturing");
         printf("controller poses: left grip %s, right aim %s (need controllers awake)\n", (flags & 2) ? "yes" : "no", (flags & 16) ? "yes" : "no");
         xrDestroySession(session);
         xrDestroyInstance(instance);
@@ -304,7 +322,7 @@ int main(int argc, char** argv) {
     printf("frames %d, frames with panel %d, panel %dx%d %s, space '%s'\n", v[4], v[5], v[7], v[8], v[9] ? "RGBA" : "BGRA", space);
     printf("quad %.3f x %.3f m, pose q(%.3f %.3f %.3f %.3f) p(%.3f %.3f %.3f)\n", geo[0], geo[1], geo[2], geo[3], geo[4], geo[5], geo[6], geo[7], geo[8]);
 
-    Expect(v[1] == 1 + 8, "game binding kept and our 4 poses, 2 haptics and 2 triggers appended");
+    Expect(v[1] == 2 + 8, "game binding kept and our 4 poses, 2 haptics and 2 triggers appended");
     Expect(v[2] == 3, "our pose set and click set attached alongside the game's");
     Expect(v[11] == 3, "pointing at the panel switched the click set on");
     Expect(v[10] > 0, "the layer read the trigger while pointing");

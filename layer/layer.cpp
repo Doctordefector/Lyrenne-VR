@@ -132,6 +132,7 @@ struct State {
     XrPath leftTriggerPath = XR_NULL_PATH, rightTriggerPath = XR_NULL_PATH;
     XrPath leftSelectPath = XR_NULL_PATH, rightSelectPath = XR_NULL_PATH;
     volatile bool captureOn = false;
+    bool loggedCapture = false;  // one log line per instance the first time the trigger is read
 
     XrSession session = XR_NULL_HANDLE;
     bool attached = false;
@@ -496,8 +497,11 @@ void PublishPoses(lyrenne::Bridge* b, XrTime time) {
             gi.action = gs.clickAction;
             gi.subactionPath = hands[i];
             XrActionStateFloat st{XR_TYPE_ACTION_STATE_FLOAT};
-            if (Ok(next.GetActionStateFloat(gs.session, &gi, &st)) && st.isActive) trig[i] = st.currentState;
+            XrResult r = next.GetActionStateFloat(gs.session, &gi, &st);
+            if (Ok(r) && st.isActive) trig[i] = st.currentState;
+            if (!gs.loggedCapture) Log("click action %s: result %d, active %d", i ? "right" : "left", r, st.isActive);
         }
+        gs.loggedCapture = true;
     }
     b->triggerLeft = trig[0];
     b->triggerRight = trig[1];
