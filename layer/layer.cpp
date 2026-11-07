@@ -147,6 +147,10 @@ struct State {
     // active the runtime routes the trigger to us instead of the game.
     XrActionSet captureSet = XR_NULL_HANDLE;
     XrAction clickAction = XR_NULL_HANDLE;
+    // Holds the trigger's touch sensor in the same set, purely so the game does not see a finger
+    // resting on the trigger while the panel has it (Hard Bullet binds one, 'triggertouched').
+    XrAction touchAction = XR_NULL_HANDLE;
+    XrPath leftTouchPath = XR_NULL_PATH, rightTouchPath = XR_NULL_PATH;
     XrPath leftTriggerPath = XR_NULL_PATH, rightTriggerPath = XR_NULL_PATH;
     XrPath leftSelectPath = XR_NULL_PATH, rightSelectPath = XR_NULL_PATH;
     volatile bool captureOn = false;
@@ -723,6 +727,10 @@ XrResult XRAPI_CALL Hook_xrSuggestInteractionProfileBindings(XrInstance instance
     auto haptics = plus(poses, {{gs.hapticAction, gs.leftHapticPath}, {gs.hapticAction, gs.rightHapticPath}});
     std::vector<std::vector<XrActionSuggestedBinding>> candidates;
     if (gs.clickAction != XR_NULL_HANDLE) {
+        // Trigger plus its touch sensor where the controller has one (Touch, Index), then without.
+        if (gs.touchAction != XR_NULL_HANDLE)
+            candidates.push_back(plus(haptics, {{gs.clickAction, gs.leftTriggerPath}, {gs.clickAction, gs.rightTriggerPath},
+                                                {gs.touchAction, gs.leftTouchPath}, {gs.touchAction, gs.rightTouchPath}}));
         candidates.push_back(plus(haptics, {{gs.clickAction, gs.leftTriggerPath}, {gs.clickAction, gs.rightTriggerPath}}));
         candidates.push_back(plus(haptics, {{gs.clickAction, gs.leftSelectPath}, {gs.clickAction, gs.rightSelectPath}}));
     }
@@ -956,6 +964,8 @@ void SetUpActions() {
     gs.leftTriggerPath = path("/user/hand/left/input/trigger/value");
     gs.rightTriggerPath = path("/user/hand/right/input/trigger/value");
     gs.leftSelectPath = path("/user/hand/left/input/select/click");
+    gs.leftTouchPath = path("/user/hand/left/input/trigger/touch");
+    gs.rightTouchPath = path("/user/hand/right/input/trigger/touch");
     gs.rightSelectPath = path("/user/hand/right/input/select/click");
 
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
@@ -1001,6 +1011,11 @@ void SetUpActions() {
         ai.subactionPaths = hands;
         if (Ok(next.CreateAction(gs.captureSet, &ai, &click))) {
             gs.clickAction = click;
+            XrAction touch = XR_NULL_HANDLE;
+            strcpy_s(ai.actionName, "panel_touch");
+            strcpy_s(ai.localizedActionName, "Finger on the trigger while using the wrist player");
+            ai.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+            if (Ok(next.CreateAction(gs.captureSet, &ai, &touch))) gs.touchAction = touch;
         } else {
             next.DestroyActionSet(gs.captureSet);
             gs.captureSet = XR_NULL_HANDLE;

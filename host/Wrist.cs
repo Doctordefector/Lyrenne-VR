@@ -237,12 +237,13 @@ public sealed class Wrist
         _trail.Enqueue((now, steady));
         while (_trail.Count > 0 && now - _trail.Peek().At > 250) _trail.Dequeue();
 
-        // Two ways to press: pull the trigger, or push the controller tip through the panel face.
+        // Pull the trigger to press; pushing the controller tip through the panel face also presses
+        // when TouchToPress is on (off by default: the trigger only, by request).
         bool wasDown = _triggerDown || _touching;
         if (!_armed && trigger < TriggerUp) _armed = true;
         if (_armed && !_triggerDown && trigger >= TriggerDown) _triggerDown = true;
         else if (_triggerDown && trigger < TriggerUp) _triggerDown = false;
-        if (!tipNear) _touching = false;
+        if (!tipNear || !_settings.TouchToPress) _touching = false;
         else if (!_touching && tip.Z <= PressDepth) _touching = true;
         else if (_touching && tip.Z >= ReleaseDepth) _touching = false;
         bool down = _triggerDown || _touching;

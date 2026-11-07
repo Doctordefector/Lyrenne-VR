@@ -326,7 +326,7 @@ int main(int argc, char** argv) {
     printf("frames %d, frames with panel %d, panel %dx%d %s, space '%s'\n", v[4], v[5], v[7], v[8], v[9] ? "RGBA" : "BGRA", space);
     printf("quad %.3f x %.3f m, pose q(%.3f %.3f %.3f %.3f) p(%.3f %.3f %.3f)\n", geo[0], geo[1], geo[2], geo[3], geo[4], geo[5], geo[6], geo[7], geo[8]);
 
-    Expect(v[1] == 2 + 8, "game binding kept and our 4 poses, 2 haptics and 2 triggers appended");
+    Expect(v[1] == 2 + 10, "game binding kept and our 4 poses, 2 haptics, 2 triggers and 2 trigger touches appended");
     Expect(v[2] == 3, "our pose set and click set attached alongside the game's");
     Expect(v[11] == 3, "pointing at the panel switched the click set on");
     if (deadClick) {

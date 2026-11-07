@@ -37,6 +37,9 @@ public sealed class Settings
     const int CurrentVersion = 3;
 
     public float GlanceAngleDeg { get; set; } = 40f;
+    /// <summary>Also press by pushing the controller tip through the panel. Off: only the trigger
+    /// clicks, so brushing the panel with a hand never presses anything.</summary>
+    public bool TouchToPress { get; set; } = false;
     public bool Haptics { get; set; } = true;
     public bool Lyrics { get; set; } = true;
     /// <summary>Only follow Lyrenne's media session instead of whatever Windows considers current.</summary>

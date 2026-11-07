@@ -28,7 +28,7 @@ static class SelfTest
     static void RunFor(Hand watchHand)
     {
         Console.WriteLine($"-- watch on the {watchHand.ToString().ToLowerInvariant()} hand");
-        var settings = new Settings { WatchHand = watchHand, Lyrics = false };
+        var settings = new Settings { WatchHand = watchHand, Lyrics = false, TouchToPress = true };
         var panel = new Panel(new Media(settings), new Volume(), new Lyrics(), settings);
         var wrist = new Wrist(settings, panel);
         int taps = 0, buzzes = 0;
@@ -189,6 +189,19 @@ static class SelfTest
             Expect(worst < 25 && taps == clicksBefore, $"a slanted controller moving in keeps the cursor still (biggest jump {worst:0} px)");
             Run(head, farPoker, 30);
         }
+
+        // Trigger only (the default): pushing the tip through the panel presses nothing.
+        settings.TouchToPress = false;
+        Run(head, Poker(play.X, play.Y, 0.03f), 50);
+        int beforeTouch = taps;
+        Run(head, Poker(play.X, play.Y, -0.006f), 80);
+        Expect(taps == beforeTouch, "with touch-to-press off, pushing into the panel does not press");
+        trigger = 0.9f;
+        Run(head, Poker(play.X, play.Y, -0.006f), 50);
+        Expect(taps == beforeTouch + 1, "with touch-to-press off, the trigger still clicks");
+        trigger = 0;
+        Run(head, farPoker, 30);
+        settings.TouchToPress = true;
 
         Run(awayHead, farPoker, 150);
         Expect(wrist.Visible, "stays open through a short look away");
