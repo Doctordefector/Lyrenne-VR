@@ -35,8 +35,19 @@ public sealed class Wrist
 
     public bool Visible => _visible;
 
-    /// <summary>Panel pose relative to the watch hand's grip.</summary>
-    public Pose PanelOffset => _settings.PanelOffset;
+    // Spin of the panel in its own plane that keeps the text level to the eyes, radians.
+    float _autoRoll;
+
+    /// <summary>Panel pose relative to the watch hand's grip, including the self-levelling spin.</summary>
+    public Pose PanelOffset
+    {
+        get
+        {
+            var o = _settings.PanelOffset;
+            if (!_settings.AutoUpright) return o;
+            return new Pose(o.Position, Quaternion.Normalize(o.Rotation * Quaternion.CreateFromAxisAngle(Vector3.UnitZ, _autoRoll)));
+        }
+    }
 
     public float PanelWidth => _settings.PanelWidthM;
     public float PanelHeight => _settings.PanelWidthM * Panel.Height / Panel.Width;
@@ -44,6 +55,7 @@ public sealed class Wrist
     public void Update(TrackingFrame f)
     {
         var watch = f.Grip(_settings.WatchHand);
+        if (watch is { } w && f.Head is { } h && _settings.AutoUpright) Level(h, w);
         Pose? panel = watch is { } g ? g.Compose(PanelOffset) : null;
 
         UpdateVisibility(f.Head, panel);
@@ -112,6 +124,36 @@ public sealed class Wrist
         return Vector3.Dot(head.Forward, -toHead) >= MathF.Cos(lookDeg * MathF.PI / 180f);
     }
 
+    /// <summary>
+    /// Turns the panel in its plane until its text is upright as the user sees it, so it reads like a
+    /// watch however the arm is held. Eased, and frozen while the panel is edge-on or being used.
+    /// </summary>
+    void Level(Pose head, Pose grip)
+    {
+        var panel = grip.Compose(PanelOffset);
+        Vector3 toHead = head.Position - panel.Position;
+        if (toHead.LengthSquared() < 1e-4f) return;
+        Vector3 view = Vector3.Normalize(-toHead);
+        if (Vector3.Dot(panel.Rotate(Vector3.UnitZ), -view) < 0.4f) return;
+        if (_panel.Interacting && _visible) return;  // never move a button out from under a finger
+        float tilt = TextTilt(head, panel, view);
+        if (float.IsNaN(tilt)) return;
+        // While hidden, snap so the panel opens already level; while shown, ease to avoid swimming.
+        _autoRoll -= _visible ? tilt * 0.25f : tilt;
+        _autoRoll = MathF.IEEERemainder(_autoRoll, MathF.Tau);
+    }
+
+    /// <summary>Angle of the panel's text from upright in the user's view, radians, + = counterclockwise.</summary>
+    static float TextTilt(Pose head, Pose panel, Vector3 view)
+    {
+        Vector3 Flat(Vector3 v) => v - view * Vector3.Dot(v, view);
+        Vector3 headUp = Flat(head.Up), panelUp = Flat(panel.Up);
+        if (headUp.LengthSquared() < 1e-6f || panelUp.LengthSquared() < 1e-6f) return float.NaN;
+        headUp = Vector3.Normalize(headUp);
+        panelUp = Vector3.Normalize(panelUp);
+        return MathF.Atan2(Vector3.Dot(Vector3.Cross(headUp, panelUp), -view), Vector3.Dot(headUp, panelUp));
+    }
+
     long _shownSince = -1;
     float _tiltSin, _tiltCos;
 
@@ -122,13 +164,8 @@ public sealed class Wrist
     void TrackLegibility(Pose? head, Pose? panel)
     {
         if (!_visible || head is not { } h || panel is not { } p) return;
-        Vector3 view = Vector3.Normalize(p.Position - h.Position);
-        Vector3 Flat(Vector3 v) => v - view * Vector3.Dot(v, view);
-        Vector3 headUp = Flat(h.Up), panelUp = Flat(p.Up);
-        if (headUp.LengthSquared() < 1e-6f || panelUp.LengthSquared() < 1e-6f) return;
-        headUp = Vector3.Normalize(headUp);
-        panelUp = Vector3.Normalize(panelUp);
-        float angle = MathF.Atan2(Vector3.Dot(Vector3.Cross(headUp, panelUp), -view), Vector3.Dot(headUp, panelUp));
+        float angle = TextTilt(h, p, Vector3.Normalize(p.Position - h.Position));
+        if (float.IsNaN(angle)) return;
         _tiltSin += MathF.Sin(angle);
         _tiltCos += MathF.Cos(angle);
     }

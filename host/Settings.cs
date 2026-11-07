@@ -23,15 +23,18 @@ public sealed class Settings
     public float TiltDeg { get; set; } = 15f;
     /// <summary>Extra spin of the panel in its own plane, counterclockwise as you look at it.</summary>
     public float RollDeg { get; set; } = 0f;
+    /// <summary>Keep the text level to the eyes whatever the arm does (on by default).</summary>
+    public bool AutoUpright { get; set; } = true;
 
     /// <summary>How far ahead of the poking controller's aim origin the virtual fingertip sits, in cm.
     /// Measured on Quest controllers under VDXR: the aim origin sits about 6 cm behind the tip
     /// people actually touch with.</summary>
     public float FingertipCm { get; set; } = 6f;
 
-    /// <summary>Bumped when a default changes in a way saved settings should pick up.</summary>
-    public int Version { get; set; } = CurrentVersion;
-    const int CurrentVersion = 2;
+    /// <summary>Bumped when a default changes in a way saved settings should pick up.
+    /// Missing from files written before versioning, so it reads as 0 there.</summary>
+    public int Version { get; set; }
+    const int CurrentVersion = 3;
 
     public float GlanceAngleDeg { get; set; } = 40f;
     public bool Haptics { get; set; } = true;
@@ -85,7 +88,15 @@ public sealed class Settings
             if (File.Exists(FilePath))
             {
                 var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new Settings();
-                if (loaded.Version < 2) loaded.FingertipCm = new Settings().FingertipCm;
+                var defaults = new Settings();
+                if (loaded.Version < 2) loaded.FingertipCm = defaults.FingertipCm;
+                if (loaded.Version < 3)
+                {
+                    // Wrist orientation is now self-levelling; old hand-tuned spins would fight it.
+                    loaded.RollDeg = 0;
+                    loaded.AutoUpright = true;
+                    loaded.FingertipCm = defaults.FingertipCm;
+                }
                 loaded.Version = CurrentVersion;
                 return loaded;
             }
@@ -102,6 +113,7 @@ public sealed class Settings
         try
         {
             System.IO.Directory.CreateDirectory(Directory);
+            Version = CurrentVersion;
             File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
         }
         catch (Exception e)

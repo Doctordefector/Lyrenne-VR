@@ -35,7 +35,7 @@ static class SelfTest
         // The watch hand somewhere in front of the chest, turned a bit, as in a real glance.
         var grip = new Pose(new Vector3(watchHand == Hand.Left ? -0.12f : 0.12f, 1.25f, -0.32f),
             Quaternion.Normalize(Quaternion.CreateFromYawPitchRoll(0.6f, -0.4f, 0.9f)));
-        var panelWorld = grip.Compose(settings.PanelOffset);
+        var panelWorld = grip.Compose(wrist.PanelOffset);
         Vector3 normal = panelWorld.Rotate(Vector3.UnitZ);
 
         // Head 35 cm in front of the panel face, looking straight at it.
@@ -66,6 +66,15 @@ static class SelfTest
         Expect(!wrist.Visible, "a brief glance does not open it");
         Run(head, farPoker, 300);
         Expect(wrist.Visible, "opens when looking at the wrist");
+
+        // Self-levelling: whatever the wrist's roll, the text ends up upright in the user's view.
+        panelWorld = grip.Compose(wrist.PanelOffset);
+        {
+            Vector3 view = Vector3.Normalize(panelWorld.Position - head.Position);
+            Vector3 Flat(Vector3 v) => Vector3.Normalize(v - view * Vector3.Dot(v, view));
+            float tilt = MathF.Acos(Math.Clamp(Vector3.Dot(Flat(head.Up), Flat(panelWorld.Up)), -1, 1)) * 180 / MathF.PI;
+            Expect(tilt < 3, $"text is upright in view (off by {tilt:0.0} deg)");
+        }
 
         // Fingertip on the play button, at a given distance in front of the panel face.
         Pose Poker(float px, float py, float depth)

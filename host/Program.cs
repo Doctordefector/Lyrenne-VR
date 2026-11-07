@@ -181,6 +181,7 @@ sealed class Tray : IDisposable
         }
         menu.Items.Add(show);
         menu.Items.Add(Toggle("Wear on right wrist", () => s.WatchHand == Hand.Right, v => s.WatchHand = v ? Hand.Right : Hand.Left));
+        menu.Items.Add(Toggle("Keep text level (like a watch you can always read)", () => s.AutoUpright, v => s.AutoUpright = v));
         menu.Items.Add(Toggle("Synced lyrics", () => s.Lyrics, v => s.Lyrics = v));
         menu.Items.Add(Toggle("Tap feedback (vibration)", () => s.Haptics, v => s.Haptics = v));
         menu.Items.Add(Toggle("Only follow Lyrenne", () => s.LyrenneOnly, v => s.LyrenneOnly = v));
