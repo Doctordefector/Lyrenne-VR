@@ -39,7 +39,7 @@ public sealed class Media : IDisposable
     readonly object _lock = new();
 
     string _title = "", _artist = "", _album = "";
-    SKImage? _art;
+    readonly ArtState _artState = new();
     PlaybackStatus _status = PlaybackStatus.Closed;
     TimeSpan _position, _duration;
     DateTimeOffset _positionAt = DateTimeOffset.UtcNow;
@@ -123,7 +123,7 @@ public sealed class Media : IDisposable
             lock (_lock)
             {
                 _title = _artist = _album = _source = "";
-                _art = null;
+                _artState.SetTrack("");
                 _status = PlaybackStatus.Closed;
                 _metadataVersion++;
             }
@@ -162,16 +162,29 @@ public sealed class Media : IDisposable
             lock (_lock)
             {
                 if (version != _metadataVersion || !ReferenceEquals(s, _session)) return;
-                bool sameTrack = key == $"{_artist}\u0001{_title}";
+                if (key != $"{_artist}\u0001{_title}")
+                {
+                    // A new song: until its timeline arrives, do not show the last song's position
+                    // and length on the new one's bar.
+                    _position = TimeSpan.Zero;
+                    _positionAt = DateTimeOffset.UtcNow;
+                    _duration = TimeSpan.Zero;
+                    _pendingSeek = null;
+                }
                 _title = title;
                 _artist = artist;
                 _album = props.AlbumTitle ?? "";
-                if (!sameTrack) _art = _artCache.TryGetValue(key, out var cached) ? cached : null;
+                _artState.SetTrack(key);
             }
+            // The timeline may already have arrived for the new song before this ran; re-read it
+            // rather than leave the reset above standing.
+            OnTimeline(s, null);
             Changed?.Invoke();
-            if (_artCache.TryGetValue(key, out var hit) && hit.Width >= 300) return;
 
-            SKImage? art = null;
+            // Every announcement's thumbnail is read, never cached as final: Lyrenne announces each
+            // song first with its logo, then again with the real cover. Every image is tagged with
+            // the track it was read for, so one that lands after a skip is simply dropped.
+            SKImage? thumb = null;
             if (props.Thumbnail != null)
             {
                 try
@@ -180,25 +193,28 @@ public sealed class Media : IDisposable
                     using var net = stream.AsStreamForRead();
                     using var copy = new MemoryStream();
                     await net.CopyToAsync(copy);
-                    art = SKImage.FromEncodedData(copy.ToArray());
-                    Log.Write($"song details +{_clock.ElapsedMilliseconds - t0} ms, artwork {art?.Width}x{art?.Height}");
+                    thumb = SKImage.FromEncodedData(copy.ToArray());
                 }
                 catch (Exception e)
                 {
                     Log.Write($"artwork unreadable: {e.Message}");
                 }
             }
-            if (!SetArt(version, key, art)) return;
+            if (_artState.OfferThumbnail(key, thumb))
+            {
+                Log.Write($"song details +{_clock.ElapsedMilliseconds - t0} ms, artwork {thumb?.Width}x{thumb?.Height}");
+                Changed?.Invoke();
+            }
 
-            // Lyrenne hands Windows a 120 px thumbnail, soft on a 224 px tile. Look up the same
-            // album cover at 600 px; keep the thumbnail if nothing matches the artist.
-            if ((art == null || art.Width < 300) && !string.IsNullOrEmpty(artist))
+            // Lyrenne's cover is a 120 px thumbnail, soft on a 224 px tile. Look up the same cover
+            // at 600 px once per song; keep the thumbnail if nothing matches the artist.
+            if (!string.IsNullOrEmpty(artist) && _artState.ShouldLookUp(key))
             {
                 var big = await Artwork.FindAsync(artist, title);
-                if (big != null)
+                if (_artState.OfferFullSize(key, big))
                 {
-                    SetArt(version, key, big);
-                    Log.Write($"sharper artwork {big.Width}x{big.Height} +{_clock.ElapsedMilliseconds - t0} ms");
+                    Log.Write($"sharper artwork {big!.Width}x{big.Height} +{_clock.ElapsedMilliseconds - t0} ms");
+                    Changed?.Invoke();
                 }
             }
         }
@@ -206,24 +222,6 @@ public sealed class Media : IDisposable
         {
             Log.Write($"reading media properties failed: {e.Message}");
         }
-    }
-
-    readonly Dictionary<string, SKImage> _artCache = new();
-
-    bool SetArt(int version, string key, SKImage? art)
-    {
-        lock (_lock)
-        {
-            if (version != _metadataVersion || key != $"{_artist}\u0001{_title}") return false;
-            if (art != null)
-            {
-                if (_artCache.Count > 64) _artCache.Clear();
-                _artCache[key] = art;
-                _art = art;
-            }
-        }
-        Changed?.Invoke();
-        return true;
     }
 
     void OnPlaybackInfo(GlobalSystemMediaTransportControlsSession s, PlaybackInfoChangedEventArgs? _)
@@ -292,7 +290,7 @@ public sealed class Media : IDisposable
         lock (_lock)
         {
             if (_session == null || string.IsNullOrEmpty(_title)) return NowPlaying.Empty with { Source = _source };
-            return new NowPlaying(_title, _artist, _album, _art, PlayingLocked, CurrentPositionLocked(), _duration,
+            return new NowPlaying(_title, _artist, _album, _artState.Current, PlayingLocked, CurrentPositionLocked(), _duration,
                 _shuffle, _repeat, _canSeek && _duration > TimeSpan.Zero, _source);
         }
     }

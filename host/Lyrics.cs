@@ -48,6 +48,7 @@ public sealed partial class Lyrics
     async Task FetchAsync(string key, NowPlaying np)
     {
         IReadOnlyList<Line>? result = null;
+        bool failed = false;
         try
         {
             var url = "api/get?artist_name=" + Uri.EscapeDataString(np.Artist) +
@@ -69,6 +70,15 @@ public sealed partial class Lyrics
         catch (Exception e)
         {
             Log.Write($"lyrics lookup failed for {np.Title}: {e.Message}");
+            failed = true;
+        }
+        // "No lyrics exist" is remembered; a timeout or network error is not, so the next frame
+        // after a short pause asks again instead of the song staying lyric-less all session.
+        if (failed)
+        {
+            await Task.Delay(TimeSpan.FromSeconds(15));
+            _inFlight.TryRemove(key, out _);
+            return;
         }
         _cache[key] = result;
         _inFlight.TryRemove(key, out _);

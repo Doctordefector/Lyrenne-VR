@@ -21,6 +21,7 @@ static class SelfTest
     {
         Log.Enabled = false;
         foreach (var hand in new[] { Hand.Left, Hand.Right }) RunFor(hand);
+        ArtSequences();
         Console.WriteLine(_failures == 0 ? "\nall checks passed" : $"\n{_failures} check(s) failed");
         return _failures == 0 ? 0 : 1;
     }
@@ -211,6 +212,46 @@ static class SelfTest
         settings.ForceShow = ShowMode.Always;
         Run(awayHead, farPoker, 30);
         Expect(wrist.Visible, "always mode shows it regardless of gaze");
+    }
+
+    /// <summary>Artwork under rapid skipping: images that land late or out of order never stick to the wrong song.</summary>
+    static void ArtSequences()
+    {
+        Console.WriteLine("-- artwork while skipping");
+        SKImage Img(int size)
+        {
+            using var surface = SKSurface.Create(new SKImageInfo(size, size));
+            return surface.Snapshot();
+        }
+        var logo = Img(512);      // Lyrenne's placeholder, published first on every song
+        var thumbB = Img(120);
+        var thumbC = Img(121);
+        var bigB = Img(600);
+        var art = new ArtState();
+
+        art.SetTrack("B");
+        art.OfferThumbnail("B", logo);
+        Expect(art.Current == logo, "a new song shows the placeholder first");
+        art.OfferThumbnail("B", thumbB);
+        Expect(art.Current == thumbB, "the real cover replaces the placeholder (the reported bug)");
+        Expect(art.ShouldLookUp("B") && !art.ShouldLookUp("B"), "the full-size cover is looked up once per song");
+
+        art.SetTrack("C");                       // skip while B's lookups are still in flight
+        Expect(art.Current == null, "skipping drops the previous song's cover at once");
+        Expect(!art.OfferThumbnail("B", thumbB), "a late thumbnail for the skipped song is ignored");
+        Expect(!art.OfferFullSize("B", bigB) && art.Current == null, "a late full-size cover for the skipped song is not shown");
+        art.OfferThumbnail("C", thumbC);
+        Expect(art.Current == thumbC, "the current song shows its own cover");
+
+        art.SetTrack("B");                       // back to B
+        Expect(art.Current == bigB, "going back shows the full-size cover found earlier, straight away");
+        art.OfferThumbnail("B", logo);
+        Expect(art.Current == bigB, "a placeholder never replaces a full-size cover");
+
+        // A fast run of skips with every result arriving in the worst order.
+        art.SetTrack("D"); art.SetTrack("E"); art.SetTrack("F");
+        art.OfferThumbnail("D", thumbB); art.OfferThumbnail("E", thumbC); art.OfferFullSize("D", bigB);
+        Expect(art.Current == null && art.Track == "F", "after D, E, F in a row nothing from D or E shows on F");
     }
 
     /// <summary>Rotation whose -Z points along <paramref name="forward"/>, keeping +Y as close to world up as possible.</summary>
