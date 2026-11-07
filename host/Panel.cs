@@ -11,21 +11,54 @@ public sealed class Panel
     public const int Width = 1024;
     public const int Height = 512;
 
-    enum Control { None, Shuffle, Previous, Play, Next, Repeat, Mute, Seek, Volume }
+    enum Control { None, Shuffle, Previous, Play, Next, Repeat, VolumeDown, Seek, Volume, VolumeUp }
 
     readonly record struct Target(Control Id, SKRect Rect, bool Drag);
 
+    // Sized for a laser at arm's length: every button is at least 96 px (1.5 cm on a 16 cm panel),
+    // the seek bar's grab zone is 78 px tall, and Hit() lets a near miss count.
     static readonly Target[] Targets =
     {
-        new(Control.Seek, new SKRect(32, 278, 992, 330), true),
-        new(Control.Shuffle, new SKRect(52, 372, 144, 464), false),
-        new(Control.Previous, new SKRect(178, 364, 286, 472), false),
-        new(Control.Play, new SKRect(312, 356, 428, 472), false),
-        new(Control.Next, new SKRect(454, 364, 562, 472), false),
-        new(Control.Repeat, new SKRect(596, 372, 688, 464), false),
-        new(Control.Mute, new SKRect(722, 376, 802, 456), false),
-        new(Control.Volume, new SKRect(808, 380, 1000, 452), true),
+        new(Control.Seek, new SKRect(24, 266, 1000, 344), true),
+        new(Control.Shuffle, new SKRect(16, 364, 112, 492), false),
+        new(Control.Previous, new SKRect(116, 364, 228, 492), false),
+        new(Control.Play, new SKRect(232, 358, 376, 498), false),
+        new(Control.Next, new SKRect(380, 364, 492, 492), false),
+        new(Control.Repeat, new SKRect(496, 364, 592, 492), false),
+        new(Control.VolumeDown, new SKRect(604, 372, 694, 484), false),
+        new(Control.Volume, new SKRect(696, 372, 902, 484), true),
+        new(Control.VolumeUp, new SKRect(904, 372, 1008, 484), false),
     };
+
+    /// <summary>Where a control sits on the panel, for tests and anything that aims at one.</summary>
+    public static SKPoint CenterOf(string control)
+    {
+        var t = Targets.First(x => x.Id.ToString() == control);
+        return new SKPoint(t.Rect.MidX, t.Rect.MidY);
+    }
+
+    // A miss by up to this many pixels still lands on the nearest control: at arm's length a laser
+    // wobbles by about that much, and the empty space between buttons does nothing useful anyway.
+    const float Magnet = 34;
+
+    static Target Hit(SKPoint p)
+    {
+        Target best = default;
+        float bestDist = Magnet;
+        foreach (var t in Targets)
+        {
+            if (t.Rect.Contains(p)) return t;
+            float dx = Math.Max(Math.Max(t.Rect.Left - p.X, 0), p.X - t.Rect.Right);
+            float dy = Math.Max(Math.Max(t.Rect.Top - p.Y, 0), p.Y - t.Rect.Bottom);
+            float d = MathF.Sqrt(dx * dx + dy * dy);
+            if (d < bestDist)
+            {
+                bestDist = d;
+                best = t;
+            }
+        }
+        return best;
+    }
 
     readonly Media _media;
     readonly Volume _volume;
@@ -37,8 +70,8 @@ public sealed class Panel
     float _hoverDepth = 1;
     bool _pressed;
     Control _active = Control.None;
+    Control _hot = Control.None;  // what a press right now would hit
     float _dragValue;
-    float _volumeBeforeMute = 0.5f;
 
     float _volumeCache = -1;
     long _volumeReadAt;
@@ -49,6 +82,9 @@ public sealed class Panel
     SKColor _accent = new(0x8A, 0xB4, 0xFF);
 
     public event Action<float, float>? Haptic;  // amplitude, seconds
+
+    /// <summary>A control was pressed (its name). Separate from Haptic, which also fires on hover.</summary>
+    public event Action<string>? Clicked;
 
     public Panel(Media media, Volume volume, Lyrics lyrics, Settings settings)
     {
@@ -72,23 +108,40 @@ public sealed class Panel
         _hover = at;
         _hoverDepth = Math.Clamp(depth, 0, 1);
 
+        // A light tick whenever the pointer moves onto a different control, so a button can be felt
+        // before it is pressed. Not while dragging: the drag owns the pointer then.
+        var hot = at is { } a && !_pressed ? Hit(a).Id : _pressed ? _active : Control.None;
+        if (hot != _hot && hot != Control.None && !_pressed && InputKind != "mouse") Haptic?.Invoke(0.12f, 0.008f);
+        _hot = hot;
+
         if (pressed && !_pressed && at is { } down)
         {
-            var hit = Targets.FirstOrDefault(t => t.Rect.Contains(down));
+            var hit = Hit(down);
             _active = hit.Id;
             if (hit.Id != Control.None)
             {
                 Haptic?.Invoke(0.35f, 0.02f);
                 Log.Write($"click {hit.Id} by {InputKind}");
+                Clicked?.Invoke(hit.Id.ToString());
                 if (!hit.Drag) Fire(hit.Id);
-                else _dragValue = DragValue(hit, down);
+                else
+                {
+                    _dragValue = DragValue(hit, down);
+                    if (hit.Id == Control.Volume) SetVolume(_dragValue);
+                }
             }
         }
         else if (pressed && _pressed && at is { } move && _active is Control.Seek or Control.Volume)
         {
             var t = Targets.First(x => x.Id == _active);
+            float before = _dragValue;
             _dragValue = DragValue(t, move);
-            if (_active == Control.Volume) SetVolume(_dragValue);
+            if (_active == Control.Volume)
+            {
+                SetVolume(_dragValue);
+                // Detents every 10 %, felt rather than seen.
+                if ((int)(before * 10) != (int)(_dragValue * 10)) Haptic?.Invoke(0.1f, 0.006f);
+            }
         }
         else if (!pressed && _pressed)
         {
@@ -105,8 +158,8 @@ public sealed class Panel
 
     static float DragValue(Target t, SKPoint p)
     {
-        // Leave a little dead zone at both ends so 0 and 100 % are easy to hit with a fingertip.
-        float inset = t.Id == Control.Seek ? 40 : 14;
+        // Dead zones at both ends so 0 and 100 % are easy to reach with a wobbly pointer.
+        float inset = t.Id == Control.Seek ? 40 : 16;
         return Math.Clamp((p.X - t.Rect.Left - inset) / (t.Rect.Width - inset * 2), 0, 1);
     }
 
@@ -119,23 +172,15 @@ public sealed class Panel
             case Control.Previous: _media.Previous(); break;
             case Control.Shuffle: _media.ToggleShuffle(); break;
             case Control.Repeat: _media.CycleRepeat(); break;
-            case Control.Mute:
-                float v = ReadVolume();
-                if (v > 0.001f)
-                {
-                    _volumeBeforeMute = v;
-                    SetVolume(0);
-                }
-                else
-                {
-                    SetVolume(Math.Max(_volumeBeforeMute, 0.1f));
-                }
-                break;
+            // Whole steps of 10 %, snapping an odd level onto the grid first.
+            case Control.VolumeDown: SetVolume(MathF.Ceiling(ReadVolume() * 10 - 0.05f) / 10 - 0.1f); break;
+            case Control.VolumeUp: SetVolume(MathF.Floor(ReadVolume() * 10 + 0.05f) / 10 + 0.1f); break;
         }
     }
 
     void SetVolume(float v)
     {
+        v = Math.Clamp(v, 0, 1);
         _volume.Set(v);
         _volumeCache = v;
         _volumeReadAt = Environment.TickCount64;
@@ -158,7 +203,7 @@ public sealed class Panel
         int progress = np.Duration > TimeSpan.Zero ? (int)(np.Position.TotalMilliseconds / np.Duration.TotalMilliseconds * 960) : 0;
         string hover = _hover is { } h ? $"{(int)h.X / 3},{(int)h.Y / 3},{(int)(_hoverDepth * 12)}" : "-";
         return string.Join('|', np.Title, np.Artist, np.Playing, np.Shuffle, np.Repeat, (int)np.Position.TotalSeconds, progress,
-            np.Art?.UniqueId ?? 0, line, hover, _pressed, _active, (int)(_dragValue * 400), (int)(ReadVolume() * 200));
+            np.Art?.UniqueId ?? 0, line, hover, _pressed, _active, _hot, (int)(_dragValue * 400), (int)(ReadVolume() * 200));
     }
 
     public void Render(SKCanvas canvas, NowPlaying np)
@@ -252,9 +297,10 @@ public sealed class Panel
         }
         else
         {
-            using var p = new SKPaint { IsAntialias = true, Color = SKColors.White.WithAlpha(22) };
-            canvas.DrawRoundRect(artRound, p);
-            DrawIcon(canvas, Icons.Note, new SKPoint(artRect.MidX, artRect.MidY), 110, SKColors.White.WithAlpha(110));
+            canvas.Save();
+            canvas.Translate(artRect.Left, artRect.Top);
+            Logo.Draw(canvas, artRect.Width, ring: true);
+            canvas.Restore();
         }
 
         float x = 292, maxW = Width - x - 40;
@@ -278,24 +324,32 @@ public sealed class Panel
     void DrawProgress(SKCanvas canvas, NowPlaying np)
     {
         var track = Targets.First(t => t.Id == Control.Seek).Rect;
-        float left = track.Left + 40, right = track.Right - 40, y = 300;
+        float left = track.Left + 40, right = track.Right - 40, y = 296;
         bool dragging = _active == Control.Seek && _pressed;
         float frac = dragging ? _dragValue
             : np.Duration > TimeSpan.Zero ? (float)Math.Clamp(np.Position.TotalMilliseconds / np.Duration.TotalMilliseconds, 0, 1) : 0;
-        bool hot = dragging || (_hover is { } h && track.Contains(h));
-        float thick = hot ? 12 : 8;
+        bool hot = dragging || _hot == Control.Seek;
+        float thick = hot ? 18 : 12;
 
         using var bg = new SKPaint { IsAntialias = true, Color = SKColors.White.WithAlpha(46) };
         canvas.DrawRoundRect(new SKRoundRect(new SKRect(left, y - thick / 2, right, y + thick / 2), thick / 2), bg);
         using var fg = new SKPaint { IsAntialias = true, Color = _accent };
         float px = left + (right - left) * frac;
         canvas.DrawRoundRect(new SKRoundRect(new SKRect(left, y - thick / 2, Math.Max(px, left + thick), y + thick / 2), thick / 2), fg);
-        if (hot || np.CanSeek) canvas.DrawCircle(px, y, hot ? 13 : 9, new SKPaint { IsAntialias = true, Color = SKColors.White });
+        if (hot || np.CanSeek) canvas.DrawCircle(px, y, hot ? 18 : 12, new SKPaint { IsAntialias = true, Color = SKColors.White });
 
         var shown = dragging ? np.Duration * frac : np.Position;
-        Text.Draw(canvas, Format(shown), left, y + 38, 22, SKFontStyleWeight.Medium, SKColors.White.WithAlpha(160), 200);
+        Text.Draw(canvas, Format(shown), left, y + 40, 24, SKFontStyleWeight.Medium, SKColors.White.WithAlpha(170), 200);
         if (np.Duration > TimeSpan.Zero)
-            Text.Draw(canvas, Format(np.Duration), right, y + 38, 22, SKFontStyleWeight.Medium, SKColors.White.WithAlpha(160), 200, alignRight: true);
+            Text.Draw(canvas, Format(np.Duration), right, y + 40, 24, SKFontStyleWeight.Medium, SKColors.White.WithAlpha(170), 200, alignRight: true);
+        if (dragging)
+        {
+            // Where the song will jump to, in a bubble above the thumb so it can be read mid-drag.
+            var bubble = new SKRoundRect(SKRect.Create(Math.Clamp(px - 64, 8, Width - 136), y - 76, 128, 48), 24);
+            using var bp = new SKPaint { IsAntialias = true, Color = SKColors.White };
+            canvas.DrawRoundRect(bubble, bp);
+            Text.Draw(canvas, Format(shown), bubble.Rect.MidX, bubble.Rect.MidY + 11, 30, SKFontStyleWeight.Bold, new SKColor(12, 12, 18), 120, center: true);
+        }
     }
 
     static string Format(TimeSpan t) => t.TotalHours >= 1 ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
@@ -305,22 +359,32 @@ public sealed class Panel
         foreach (var t in Targets)
         {
             if (t.Drag) continue;
-            bool hover = _hover is { } h && t.Rect.Contains(h);
+            bool hover = _hot == t.Id && !_pressed;
             bool down = _pressed && _active == t.Id;
             var center = new SKPoint(t.Rect.MidX, t.Rect.MidY);
 
             if (t.Id == Control.Play)
             {
                 using var circle = new SKPaint { IsAntialias = true, Color = down ? _accent.WithAlpha(210) : _accent };
-                canvas.DrawCircle(center, down ? 52 : hover ? 58 : 56, circle);
-                DrawIcon(canvas, np.Playing ? Icons.Pause : Icons.Play, center, 64, new SKColor(12, 12, 18));
+                canvas.DrawCircle(center, down ? 58 : hover ? 68 : 64, circle);
+                DrawIcon(canvas, np.Playing ? Icons.Pause : Icons.Play, center, 76, new SKColor(12, 12, 18));
                 continue;
             }
 
             if (hover || down)
             {
-                using var halo = new SKPaint { IsAntialias = true, Color = SKColors.White.WithAlpha((byte)(down ? 60 : 28)) };
+                using var halo = new SKPaint { IsAntialias = true, Color = SKColors.White.WithAlpha((byte)(down ? 70 : 36)) };
                 canvas.DrawCircle(center, Math.Min(t.Rect.Width, t.Rect.Height) / 2, halo);
+            }
+
+            if (t.Id is Control.VolumeDown or Control.VolumeUp)
+            {
+                using var ring = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 4, Color = SKColors.White.WithAlpha(150) };
+                canvas.DrawCircle(center, 34, ring);
+                using var bar = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 7, StrokeCap = SKStrokeCap.Round, Color = SKColors.White };
+                canvas.DrawLine(center.X - 15, center.Y, center.X + 15, center.Y, bar);
+                if (t.Id == Control.VolumeUp) canvas.DrawLine(center.X, center.Y - 15, center.X, center.Y + 15, bar);
+                continue;
             }
 
             var (path, on) = t.Id switch
@@ -329,32 +393,30 @@ public sealed class Panel
                 Control.Previous => (Icons.Previous, true),
                 Control.Next => (Icons.Next, true),
                 Control.Repeat => (np.Repeat == Repeat.One ? Icons.RepeatOne : Icons.Repeat, np.Repeat != Repeat.Off),
-                Control.Mute => (ReadVolume() < 0.001f ? Icons.VolumeOff : Icons.VolumeUp, true),
                 _ => (null, false),
             };
             if (path == null) continue;
             bool toggle = t.Id is Control.Shuffle or Control.Repeat;
-            var color = toggle ? (on ? _accent : SKColors.White.WithAlpha(130)) : SKColors.White;
-            float size = t.Id is Control.Previous or Control.Next ? 60 : 46;
+            var color = toggle ? (on ? _accent : SKColors.White.WithAlpha(140)) : SKColors.White;
+            float size = t.Id is Control.Previous or Control.Next ? 76 : 56;
             DrawIcon(canvas, path, center, size, color);
-            if (toggle && on) canvas.DrawCircle(center.X, t.Rect.Bottom - 6, 4, new SKPaint { IsAntialias = true, Color = _accent });
+            if (toggle && on) canvas.DrawCircle(center.X, t.Rect.Bottom - 10, 5, new SKPaint { IsAntialias = true, Color = _accent });
         }
 
-        // Volume slider.
+        // Volume: a chunky bar you can grab anywhere, with the level always shown above it.
         var vt = Targets.First(t => t.Id == Control.Volume);
-        float vl = vt.Rect.Left + 14, vr = vt.Rect.Right - 14, vy = vt.Rect.MidY;
+        float vl = vt.Rect.Left + 16, vr = vt.Rect.Right - 16, vy = vt.Rect.MidY + 12;
         float vol = _active == Control.Volume && _pressed ? _dragValue : ReadVolume();
-        bool vhot = (_hover is { } vh && vt.Rect.Contains(vh)) || (_active == Control.Volume && _pressed);
-        float th = vhot ? 12 : 8;
+        bool vhot = _hot == Control.Volume || (_active == Control.Volume && _pressed);
+        float th = vhot ? 22 : 16;
         using var vbg = new SKPaint { IsAntialias = true, Color = SKColors.White.WithAlpha(46) };
         canvas.DrawRoundRect(new SKRoundRect(new SKRect(vl, vy - th / 2, vr, vy + th / 2), th / 2), vbg);
         using var vfg = new SKPaint { IsAntialias = true, Color = SKColors.White.WithAlpha(230) };
         float vx = vl + (vr - vl) * vol;
         canvas.DrawRoundRect(new SKRoundRect(new SKRect(vl, vy - th / 2, Math.Max(vx, vl + th), vy + th / 2), th / 2), vfg);
-        canvas.DrawCircle(vx, vy, vhot ? 13 : 9, new SKPaint { IsAntialias = true, Color = SKColors.White });
-        if (vhot)
-            Text.Draw(canvas, $"{(int)Math.Round(vol * 100)}%", (vl + vr) / 2, vy - 22, 20, SKFontStyleWeight.SemiBold,
-                SKColors.White.WithAlpha(200), 120, center: true);
+        canvas.DrawCircle(vx, vy, vhot ? 20 : 14, new SKPaint { IsAntialias = true, Color = SKColors.White });
+        Text.Draw(canvas, $"{(int)Math.Round(vol * 100)}%", (vl + vr) / 2, vy - 30, vhot ? 30 : 24, SKFontStyleWeight.SemiBold,
+            SKColors.White.WithAlpha((byte)(vhot ? 240 : 170)), 160, center: true);
     }
 
     void DrawCursor(SKCanvas canvas)

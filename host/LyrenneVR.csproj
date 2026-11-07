@@ -11,6 +11,7 @@
     <RootNamespace>LyrenneVR</RootNamespace>
     <Version>1.0.0</Version>
     <Product>Lyrenne VR</Product>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- Valve's generated bindings trip a lot of style warnings that are not ours to fix. -->
@@ -26,6 +27,7 @@
   <ItemGroup>
     <Compile Include="..\third_party\openvr\openvr_api.cs" Link="ThirdParty\openvr_api.cs" />
     <None Include="..\third_party\openvr\openvr_api.dll" Link="openvr_api.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="app.png" CopyToOutputDirectory="PreserveNewest" />
     <None Include="steamvr\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="steamvr" />
   </ItemGroup>
 

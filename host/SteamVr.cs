@@ -122,6 +122,7 @@ public sealed class SteamVr : IDisposable
                     "binary_path_windows": {{System.Text.Json.JsonSerializer.Serialize(exe)}},
                     "arguments": "--from-steamvr",
                     "is_dashboard_overlay": true,
+                    "image_path": {{System.Text.Json.JsonSerializer.Serialize(Path.Combine(dir, "app.png"))}},
                     "strings": { "en_us": { "name": "Lyrenne Wrist Player", "description": "Control Lyrenne from your wrist in any game" } }
                   }]
                 }

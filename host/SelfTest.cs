@@ -30,8 +30,12 @@ static class SelfTest
         var settings = new Settings { WatchHand = watchHand, Lyrics = false };
         var panel = new Panel(new Media(settings), new Volume(), new Lyrics(), settings);
         var wrist = new Wrist(settings, panel);
-        int taps = 0;
-        panel.Haptic += (_, _) => taps++;
+        int taps = 0, buzzes = 0;
+        string last = "";
+        panel.Clicked += c => { taps++; last = c; };
+        panel.Haptic += (_, _) => buzzes++;
+        var play = Panel.CenterOf("Play");
+        var next = Panel.CenterOf("Next");
 
         // The watch hand somewhere in front of the chest, turned a bit, as in a real glance.
         var grip = new Pose(new Vector3(watchHand == Hand.Left ? -0.12f : 0.12f, 1.25f, -0.32f),
@@ -88,21 +92,21 @@ static class SelfTest
             return new Pose(tip - Vector3.Transform(new Vector3(0, 0, -settings.FingertipCm / 100f), rot), rot);
         }
 
-        Run(head, Poker(370, 414, 0.03f), 50);
+        Run(head, Poker(play.X, play.Y, 0.03f), 50);
         Expect(panel.Interacting && taps == 0, "hovering 3 cm above play shows the cursor without tapping");
-        Run(head, Poker(370, 414, -0.004f), 50);
+        Run(head, Poker(play.X, play.Y, -0.004f), 50);
         Expect(taps == 1, "touching play taps once");
-        Run(head, Poker(370, 414, -0.01f), 50);
+        Run(head, Poker(play.X, play.Y, -0.01f), 50);
         Expect(taps == 1, "holding the finger in does not repeat");
-        Run(head, Poker(370, 414, 0.004f), 50);
+        Run(head, Poker(play.X, play.Y, 0.004f), 50);
         Expect(taps == 1, "tiny lift inside the hysteresis does not re-tap");
-        Run(head, Poker(370, 414, 0.03f), 50);
-        Run(head, Poker(508, 418, -0.004f), 50);
+        Run(head, Poker(play.X, play.Y, 0.03f), 50);
+        Run(head, Poker(next.X, next.Y, -0.004f), 50);
         Expect(taps == 2, "lifting and touching next taps again");
-        Run(head, Poker(508, 418, 0.03f), 50);
-        Run(head, Poker(508, 418, -0.09f), 50);
+        Run(head, Poker(next.X, next.Y, 0.03f), 50);
+        Run(head, Poker(next.X, next.Y, -0.09f), 50);
         Expect(taps == 2, "a hand passing straight through does not tap");
-        Run(head, Poker(1300, 418, -0.004f), 50);
+        Run(head, Poker(1300, next.Y, -0.004f), 50);
         Expect(taps == 2, "touching beside the panel does nothing");
 
         // Laser: the poking controller 40 cm in front of the panel, aimed at a button.
@@ -114,29 +118,51 @@ static class SelfTest
             return new Pose(from, LookRotation(target - from));
         }
         trigger = 0;
-        Run(head, Laser(370, 414), 50);
+        Run(head, Laser(play.X, play.Y), 50);
         Expect(wrist.Pointing && panel.Interacting && taps == 2, "pointing at play from 40 cm shows the cursor and asks for the trigger");
         trigger = 0.9f;
-        Run(head, Laser(370, 414), 50);
+        Run(head, Laser(play.X, play.Y), 50);
         Expect(taps == 3, "pulling the trigger clicks");
-        Run(head, Laser(370, 414), 100);
+        Run(head, Laser(play.X, play.Y), 100);
         Expect(taps == 3, "holding the trigger does not repeat");
         trigger = 0;
-        Run(head, Laser(508, 418), 50);
+        Run(head, Laser(next.X, next.Y), 50);
         trigger = 0.9f;
-        Run(head, Laser(508, 418), 50);
+        Run(head, Laser(next.X, next.Y), 50);
         Expect(taps == 4, "release and pull again clicks the next button");
         trigger = 0;
         Run(head, farPoker, 50);
         Expect(!wrist.Pointing, "pointing away gives the trigger back to the game");
         trigger = 0.9f;
-        Run(head, Laser(370, 414), 80);
+        Run(head, Laser(play.X, play.Y), 80);
         Expect(taps == 4, "a trigger already held when the ray arrives does not click");
         trigger = 0;
-        Run(head, Laser(370, 414), 30);
+        Run(head, Laser(play.X, play.Y), 30);
         trigger = 0.9f;
-        Run(head, Laser(370, 414), 50);
+        Run(head, Laser(play.X, play.Y), 50);
         Expect(taps == 5, "after letting go it clicks normally");
+        trigger = 0;
+        Run(head, farPoker, 30);
+
+        // Magnetism: a laser landing just outside the play button (in the gap below it) still clicks it.
+        Run(head, Laser(play.X, play.Y + 92), 60);
+        trigger = 0.9f;
+        Run(head, Laser(play.X, play.Y + 92), 50);
+        Expect(taps == 6 && last == "Play", $"a near miss below play still clicks play (got {last})");
+        trigger = 0;
+        Run(head, farPoker, 30);
+
+        // Hover buzz: sweeping from play to next gives a light tick on arriving at next, no click.
+        Run(head, Laser(play.X, play.Y), 60);
+        int before = buzzes;
+        Run(head, Laser(next.X, next.Y), 120);
+        Expect(buzzes > before && taps == 6, "moving onto another button buzzes lightly without clicking");
+
+        // Click drift: the squeeze yanks the laser 90 px sideways, but the click lands where it was.
+        Run(head, Laser(play.X, play.Y), 200);
+        trigger = 0.9f;
+        Run(head, Laser(play.X + 140, play.Y), 12);
+        Expect(taps == 7 && last == "Play", $"the click lands where the laser was before the squeeze (got {last})");
         trigger = 0;
         Run(head, farPoker, 30);
 

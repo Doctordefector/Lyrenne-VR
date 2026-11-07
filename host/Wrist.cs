@@ -227,22 +227,88 @@ public sealed class Wrist
 
         float trigger = f.Trigger(_settings.PokeHand);
         Diagnose($"laser on panel, trigger {trigger:0.00}");
+        long now = Environment.TickCount64;
+        var raw = ToPixel(at, hw, hh, clamp: false);
         if (!Pointing)
         {
             Pointing = true;
             // A trigger already held when the ray arrives (firing in the game) must be let go first.
             _armed = trigger < TriggerUp;
+            _filterX.Reset();
+            _filterY.Reset();
+            _trail.Clear();
         }
+        // Hand tremor is magnified by the lever of a laser: steady it, but stay quick for real moves.
+        var steady = new SKPoint(_filterX.Filter(raw.X, now), _filterY.Filter(raw.Y, now));
+        _trail.Enqueue((now, steady));
+        while (_trail.Count > 0 && now - _trail.Peek().At > 250) _trail.Dequeue();
+
         _panel.InputKind = "trigger";
         if (!_armed && trigger < TriggerUp) _armed = true;
+        bool wasDown = _triggerDown;
         if (_armed && !_triggerDown && trigger >= TriggerDown) _triggerDown = true;
         else if (_triggerDown && trigger < TriggerUp) _triggerDown = false;
-        _panel.Pointer(ToPixel(at, hw, hh), 0.5f, _triggerDown);
+
+        // Squeezing a trigger rolls the controller a little, which drags the laser off what it was
+        // on. Press where the pointer was just before the squeeze started.
+        var point = steady;
+        if (_triggerDown && !wasDown)
+            foreach (var (t, earlier) in _trail)
+                if (now - t <= ClickLookbackMs) { point = earlier; break; }
+        _panel.Pointer(Clamp(point), 0.5f, _triggerDown);
     }
 
-    SKPoint ToPixel(Vector3 local, float hw, float hh) => new(
-        Math.Clamp((local.X + hw) / PanelWidth, 0, 1) * Panel.Width,
-        Math.Clamp((hh - local.Y) / PanelHeight, 0, 1) * Panel.Height);
+    const long ClickLookbackMs = 120;
+    readonly OneEuro _filterX = new(), _filterY = new();
+    readonly Queue<(long At, SKPoint P)> _trail = new();
+
+    static SKPoint Clamp(SKPoint p) => new(Math.Clamp(p.X, 0, Panel.Width), Math.Clamp(p.Y, 0, Panel.Height));
+
+    /// <summary>
+    /// The 1 Euro filter (Casiez et al.): heavy smoothing while the pointer is nearly still, almost
+    /// none while it moves fast, which is what a laser needs to feel both steady and responsive.
+    /// Values are panel pixels.
+    /// </summary>
+    sealed class OneEuro
+    {
+        const float MinCutoff = 1.0f;   // Hz, at rest
+        const float Beta = 0.008f;      // how fast the cutoff opens with speed (per px/s)
+        const float DerivCutoff = 1.0f;
+        float _x, _dx;
+        long _at = -1;
+
+        public void Reset() => _at = -1;
+
+        public float Filter(float x, long nowMs)
+        {
+            if (_at < 0)
+            {
+                _at = nowMs;
+                _x = x;
+                _dx = 0;
+                return x;
+            }
+            float dt = Math.Max((nowMs - _at) / 1000f, 0.001f);
+            _at = nowMs;
+            float dx = (x - _x) / dt;
+            _dx += Alpha(DerivCutoff, dt) * (dx - _dx);
+            float cutoff = MinCutoff + Beta * MathF.Abs(_dx);
+            _x += Alpha(cutoff, dt) * (x - _x);
+            return _x;
+        }
+
+        static float Alpha(float cutoff, float dt)
+        {
+            float tau = 1f / (2 * MathF.PI * cutoff);
+            return 1f / (1f + tau / dt);
+        }
+    }
+
+    SKPoint ToPixel(Vector3 local, float hw, float hh, bool clamp = true)
+    {
+        var p = new SKPoint((local.X + hw) / PanelWidth * Panel.Width, (hh - local.Y) / PanelHeight * Panel.Height);
+        return clamp ? Clamp(p) : p;
+    }
 
     void Release()
     {

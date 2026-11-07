@@ -11,6 +11,16 @@ static class Program
         if (args.Length >= 2 && args[0] == "--render") return RenderToFile(args);
         if (args.Contains("--selftest")) return SelfTest.Run();
         if (args.Contains("--sessions")) return ListSessions();
+        if (args.Length >= 2 && args[0] == "--ico") return WriteIco(args[1]);
+        if (args.Length >= 2 && args[0] == "--logo")
+        {
+            // --logo out.png [size] [small]: the mark, for checking it and for the .ico.
+            int size = args.Length > 2 ? int.Parse(args[2]) : 512;
+            using var img = Logo.Render(size, ring: !args.Contains("small"));
+            using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(args[1], data.ToArray());
+            return 0;
+        }
         if (args.Contains("--steamvr-test")) return SteamVrTest();
 
         using var single = new Mutex(true, "LyrenneVR.Host.Single", out bool first);
@@ -74,6 +84,37 @@ static class Program
             Thread.Sleep(100);
         }
         return problems.Count == 0 && frame?.Head != null ? 0 : 1;
+    }
+
+    /// <summary>
+    /// --ico out.ico: every size Windows asks for, so no shell view upscales a smaller entry.
+    /// Ringless art up to 48 px, where the ring would be most of the pixels; the full mark above.
+    /// </summary>
+    static int WriteIco(string path)
+    {
+        int[] sizes = { 16, 20, 24, 32, 40, 48, 64, 96, 128, 256 };
+        var images = sizes.Select(size =>
+        {
+            using var img = Logo.Render(size, ring: size > 48);
+            using var data = img.Encode(SKEncodedImageFormat.Png, 100);
+            return data.ToArray();
+        }).ToList();
+        using var f = File.Create(path);
+        using var w = new BinaryWriter(f);
+        w.Write((ushort)0); w.Write((ushort)1); w.Write((ushort)sizes.Length);
+        int offset = 6 + 16 * sizes.Length;
+        for (int i = 0; i < sizes.Length; i++)
+        {
+            w.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));
+            w.Write((byte)(sizes[i] >= 256 ? 0 : sizes[i]));
+            w.Write((byte)0); w.Write((byte)0);
+            w.Write((ushort)1); w.Write((ushort)32);
+            w.Write(images[i].Length);
+            w.Write(offset);
+            offset += images[i].Length;
+        }
+        foreach (var img in images) w.Write(img);
+        return 0;
     }
 
     /// <summary>--sessions: every media session Windows exposes, which one the app would follow, and why.</summary>
@@ -415,26 +456,12 @@ static class AppIcon
 {
     static Icon? _icon;
 
-    /// <summary>A round accent badge with a note, drawn once at startup.</summary>
+    /// <summary>The Lyrenne VR mark at tray size, drawn once at startup.</summary>
     public static Icon Create()
     {
         if (_icon != null) return _icon;
-        using var bmp = new SKBitmap(64, 64, SKColorType.Bgra8888, SKAlphaType.Premul);
-        using (var c = new SKCanvas(bmp))
-        {
-            c.Clear(SKColors.Transparent);
-            using var bg = new SKPaint
-            {
-                IsAntialias = true,
-                Shader = SKShader.CreateLinearGradient(new SKPoint(0, 0), new SKPoint(64, 64),
-                    new[] { new SKColor(0x8A, 0xB4, 0xFF), new SKColor(0xB3, 0x88, 0xFF) }, SKShaderTileMode.Clamp),
-            };
-            c.DrawCircle(32, 32, 30, bg);
-            c.Translate(14, 12);
-            c.Scale(36 / 24f);
-            using var fg = new SKPaint { IsAntialias = true, Color = new SKColor(16, 16, 24) };
-            c.DrawPath(Icons.Note, fg);
-        }
+        using var img = Logo.Render(64, ring: false);
+        using var bmp = SKBitmap.FromImage(img);
         using var gdi = new Bitmap(64, 64, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
         var data = gdi.LockBits(new Rectangle(0, 0, 64, 64), System.Drawing.Imaging.ImageLockMode.WriteOnly, gdi.PixelFormat);
         System.Runtime.InteropServices.Marshal.Copy(bmp.Bytes, 0, data.Scan0, bmp.Bytes.Length);
