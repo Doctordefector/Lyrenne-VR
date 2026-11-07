@@ -4,3 +4,5 @@ host/bin/
 host/obj/
 *.user
 .vs/
+installer/bin/
+installer/obj/

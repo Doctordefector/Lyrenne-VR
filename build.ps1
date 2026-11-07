@@ -34,6 +34,45 @@ if ($Test) {
     }
 }
 
+Write-Host '== installer'
+# Self-contained, so people need no .NET runtime; the setup exe carries it all in one file.
+$sc = Join-Path $root 'build\host-sc'
+if (Test-Path $sc) { Remove-Item $sc -Recurse -Force }
+dotnet publish (Join-Path $root 'host\LyrenneVR.csproj') -c Release -r win-x64 --self-contained true -o $sc -v quiet -nologo
+if ($LASTEXITCODE) { throw 'self-contained host build failed' }
+Get-ChildItem $sc -Filter *.pdb -Recurse | Remove-Item
+New-Item -ItemType Directory (Join-Path $sc 'layer') -Force | Out-Null
+Copy-Item (Join-Path $root 'build\layer\XR_APILAYER_LYRENNE_wrist_player.dll'), (Join-Path $root 'build\layer\XR_APILAYER_LYRENNE_wrist_player.json') (Join-Path $sc 'layer')
+$uninst = Join-Path $root 'build\uninstaller'
+dotnet build (Join-Path $root 'installer\Setup.csproj') -c Release -p:Uninstaller=true -o $uninst -v quiet -nologo
+if ($LASTEXITCODE) { throw 'uninstaller build failed' }
+Copy-Item (Join-Path $uninst 'Uninstall.exe') $sc
+$payload = Join-Path $root 'build\payload.zip'
+if (Test-Path $payload) { Remove-Item $payload }
+# Written entry by entry: Windows PowerShell's ZipFile.CreateFromDirectory names entries with
+# backslashes ("layer\x.dll"), which is not a valid zip path.
+Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
+$zipStream = [System.IO.File]::Open($payload, 'CreateNew')
+$zip = New-Object System.IO.Compression.ZipArchive($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    $scFull = (Resolve-Path $sc).Path.TrimEnd('\') + '\'
+    foreach ($f in Get-ChildItem $sc -Recurse -File) {
+        $name = $f.FullName.Substring($scFull.Length).Replace('\', '/')
+        [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $f.FullName, $name, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+    }
+} finally {
+    $zip.Dispose()
+    $zipStream.Dispose()
+}
+$version = ([xml](Get-Content (Join-Path $root 'host\LyrenneVR.csproj'))).Project.PropertyGroup.Version | Select-Object -First 1
+$setupOut = Join-Path $root 'build\setup'
+dotnet build (Join-Path $root 'installer\Setup.csproj') -c Release -o $setupOut -v quiet -nologo
+if ($LASTEXITCODE) { throw 'installer build failed' }
+New-Item -ItemType Directory (Join-Path $root 'dist') -Force | Out-Null
+$setupExe = Join-Path $root "dist\LyrenneVR-Setup-$version.exe"
+Copy-Item (Join-Path $setupOut 'LyrenneVR-Setup.exe') $setupExe -Force
+Write-Host ("installer {0} ({1:N0} MB)" -f $setupExe, ((Get-Item $setupExe).Length / 1MB))
+
 Write-Host '== package'
 if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory $dist | Out-Null

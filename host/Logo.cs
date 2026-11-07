@@ -49,66 +49,72 @@ public static class Logo
         canvas.Save();
         if (!ring)
         {
-            // The small variant scales the lyre up into the space the ring used, as icon-small.svg does.
-            canvas.Translate(256, 262);
-            canvas.Scale(1.16f);
-            canvas.Translate(-256, -262);
+            // Without the ring there is room to spare: use it, as icon-small.svg does for the lyre.
+            canvas.Translate(256, 256);
+            canvas.Scale(1.12f);
+            canvas.Translate(-256, -256);
         }
-
-        // Strings first so the yoke and soundbox close over their ends.
-        using (var strings = new SKPaint { IsAntialias = true, Shader = ivory })
-            for (int x = 216; x <= 296; x += 20) canvas.DrawRect(x, 146, 8, 206, strings);
-
-        // Gold rim: the body fattened by a stroke, then covered by the unstroked white body.
-        using (var rim = new SKPaint { IsAntialias = true, Shader = edge, Style = SKPaintStyle.StrokeAndFill, StrokeWidth = 11, StrokeJoin = SKStrokeJoin.Round })
-            foreach (var p in Body) canvas.DrawPath(p, rim);
-        using (var fill = new SKPaint { IsAntialias = true, Shader = ivory })
-            foreach (var p in Body) canvas.DrawPath(p, fill);
-
-        DrawHeadset(canvas, edge);
+        DrawHeadsetMark(canvas, edge, ivory);
         canvas.Restore();
         canvas.Restore();
         edge.Dispose();
         ivory.Dispose();
     }
 
-    /// <summary>The VR twist: a visor across the strings, strapped to both arms.</summary>
-    static void DrawHeadset(SKCanvas canvas, SKShader edge)
-    {
-        // Strap: a thin gold band from arm to arm behind the visor.
-        using (var strap = new SKPaint { IsAntialias = true, Shader = edge })
-            canvas.DrawRoundRect(new SKRoundRect(new SKRect(150, 214, 362, 226), 4), strap);
+    // A front-on VR headset: ivory shell with a dip for the nose. Wide and short on purpose, so at
+    // tray size it reads as a headset and cannot be mistaken for the tall Lyrenne lyre.
+    static readonly SKPath Shell = SKPath.ParseSvgPathData(
+        "M164 168 L348 168 C381 168 408 195 408 228 L408 284 C408 317 381 344 348 344 L302 344 " +
+        "C290 344 282 333 276 323 C270 312 264 304 256 304 C248 304 242 312 236 323 C230 333 222 344 210 344 " +
+        "L164 344 C131 344 104 317 104 284 L104 228 C104 195 131 168 164 168 Z");
 
-        // Visor: a slim dark band, gold rimmed, with a small dip for the nose.
-        var visor = SKPath.ParseSvgPathData(
-            "M190 202 C 190 194 196 190 204 190 L 308 190 C 316 190 322 194 322 202 L 322 238 " +
-            "C 322 246 316 250 308 250 L 278 250 C 270 250 266 242 256 238 C 246 242 242 250 234 250 " +
-            "L 204 250 C 196 250 190 246 190 238 Z");
-        using (var rim = new SKPaint { IsAntialias = true, Shader = edge, Style = SKPaintStyle.StrokeAndFill, StrokeWidth = 9, StrokeJoin = SKStrokeJoin.Round })
-            canvas.DrawPath(visor, rim);
-        using (var body = new SKPaint
+    /// <summary>The Lyrenne VR mark: a headset whose dark faceplate carries the Lyrenne lyre in gold.</summary>
+    static void DrawHeadsetMark(SKCanvas canvas, SKShader edge, SKShader ivory)
+    {
+        // Strap, behind the shell, out to both sides.
+        using (var strap = new SKPaint { IsAntialias = true, Shader = edge })
+            canvas.DrawRoundRect(new SKRoundRect(new SKRect(60, 230, 452, 268), 19), strap);
+
+        // Shell: gold rim first, the ivory body over it, so gold only shows around the outside
+        // (the same one-silhouette trick the Lyrenne logo uses).
+        using (var rim = new SKPaint { IsAntialias = true, Shader = edge, Style = SKPaintStyle.StrokeAndFill, StrokeWidth = 14, StrokeJoin = SKStrokeJoin.Round })
+            canvas.DrawPath(Shell, rim);
+        using (var body = new SKPaint { IsAntialias = true, Shader = ivory })
+            canvas.DrawPath(Shell, body);
+
+        // Faceplate: the dark glass front, framed by the shell.
+        var plate = new SKRoundRect(new SKRect(130, 190, 382, 290), 38);
+        using (var glass = new SKPaint
         {
             IsAntialias = true,
-            Shader = SKShader.CreateLinearGradient(new SKPoint(0, 190), new SKPoint(0, 250),
-                new[] { new SKColor(0x26, 0x23, 0x1f), Tile }, SKShaderTileMode.Clamp),
+            Shader = SKShader.CreateLinearGradient(new SKPoint(0, 190), new SKPoint(0, 290),
+                new[] { new SKColor(0x2a, 0x26, 0x22), Tile }, SKShaderTileMode.Clamp),
         })
-            canvas.DrawPath(visor, body);
+            canvas.DrawRoundRect(plate, glass);
 
-        // Two lenses lit in the warm gold, like the screens glowing inside.
-        foreach (float cx in new[] { 224f, 288f })
+        // The Lyrenne lyre on the faceplate, in gold: the same paths as the app logo, scaled down.
+        canvas.Save();
+        canvas.Translate(256, 240);
+        canvas.Scale(0.3f);
+        canvas.Translate(-256, -268);
+        using (var gold = new SKPaint { IsAntialias = true, Shader = edge })
         {
-            var oval = new SKRect(cx - 21, 205, cx + 21, 233);
-            using var glow = new SKPaint
-            {
-                IsAntialias = true,
-                Shader = SKShader.CreateRadialGradient(new SKPoint(cx - 5, 215), 26,
-                    new[] { GoldLight, Gold, GoldDark }, new[] { 0f, 0.6f, 1f }, SKShaderTileMode.Clamp),
-            };
-            canvas.DrawOval(oval, glow);
+            for (int x = 216; x <= 296; x += 20) canvas.DrawRect(x, 146, 8, 206, gold);
+            foreach (var path in Body) canvas.DrawPath(path, gold);
         }
-        // A glint along the top edge so it reads as glass.
-        using var glint = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 4, StrokeCap = SKStrokeCap.Round, Color = SKColors.White.WithAlpha(120) };
-        canvas.DrawLine(206, 198, 240, 198, glint);
+        canvas.Restore();
+
+        // A soft reflection across the glass so it reads as a lens at a glance.
+        canvas.Save();
+        canvas.ClipRoundRect(plate, antialias: true);
+        using (var shine = new SKPaint
+        {
+            IsAntialias = true,
+            Shader = SKShader.CreateLinearGradient(new SKPoint(130, 190), new SKPoint(230, 290),
+                new[] { SKColors.White.WithAlpha(60), SKColors.White.WithAlpha(0) }, SKShaderTileMode.Clamp),
+        })
+            canvas.DrawPath(SKPath.ParseSvgPathData("M130 190 L250 190 L160 290 L130 290 Z"), shine);
+        canvas.Restore();
     }
 
     public static SKImage Render(int size, bool ring)

@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    .NET Framework 4.8 ships with Windows 10 and 11, so the installer needs no runtime of its own.
+    Built as a self-contained .NET app it carried a second 46 MB copy of .NET next to the app's.
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName Condition="'$(Uninstaller)' != 'true'">LyrenneVR-Setup</AssemblyName>
+    <!-- Built first without the payload: the small Uninstall.exe that ships inside the app. -->
+    <AssemblyName Condition="'$(Uninstaller)' == 'true'">Uninstall</AssemblyName>
+    <RootNamespace>LyrenneVR.Setup</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>Lyrenne VR</Product>
+    <Company>Lyrenne</Company>
+    <Description>Lyrenne VR installer</Description>
+    <ApplicationIcon>..\host\app.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <PlatformTarget>x64</PlatformTarget>
+    <GenerateBindingRedirectsOutputType>false</GenerateBindingRedirectsOutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+    <Reference Include="Microsoft.CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The whole app (self-contained host + OpenXR layer), zipped by build.ps1. -->
+    <EmbeddedResource Include="..\build\payload.zip" LogicalName="payload.zip" Condition="'$(Uninstaller)' != 'true'" />
+    <EmbeddedResource Include="..\host\app.png" LogicalName="logo.png" />
+  </ItemGroup>
+
+</Project>
