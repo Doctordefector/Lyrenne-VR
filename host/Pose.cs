@@ -42,8 +42,10 @@ public readonly record struct Pose(Vector3 Position, Quaternion Rotation)
 }
 
 /// <summary>One sample of everything the wrist player needs to know about the user. Missing poses are null.</summary>
-public sealed record TrackingFrame(Pose? Head, Pose? LeftGrip, Pose? RightGrip, Pose? LeftAim, Pose? RightAim)
+public sealed record TrackingFrame(Pose? Head, Pose? LeftGrip, Pose? RightGrip, Pose? LeftAim, Pose? RightAim,
+    float LeftTrigger = 0, float RightTrigger = 0)
 {
+    public float Trigger(Hand h) => h == Hand.Left ? LeftTrigger : RightTrigger;
     public Pose? Grip(Hand h) => h == Hand.Left ? LeftGrip : RightGrip;
     public Pose? Aim(Hand h) => h == Hand.Left ? LeftAim : RightAim;
 }

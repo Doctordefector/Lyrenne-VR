@@ -21,15 +21,18 @@ public sealed class Settings
     public float OffsetElbowCm { get; set; } = 12f;
     /// <summary>Rolls the panel around the forearm, positive turns it toward the face in the usual glance pose.</summary>
     public float TiltDeg { get; set; } = 15f;
+    /// <summary>Extra spin of the panel in its own plane, counterclockwise as you look at it.</summary>
+    public float RollDeg { get; set; } = 0f;
 
-    /// <summary>How far ahead of the poking controller's aim origin the virtual fingertip sits, in cm.</summary>
-    /// <summary>Measured on Quest controllers under VDXR: the aim origin sits about 6 cm behind
-    /// the tip people actually touch with.</summary>
+    /// <summary>How far ahead of the poking controller's aim origin the virtual fingertip sits, in cm.
+    /// Measured on Quest controllers under VDXR: the aim origin sits about 6 cm behind the tip
+    /// people actually touch with.</summary>
     public float FingertipCm { get; set; } = 6f;
 
     /// <summary>Bumped when a default changes in a way saved settings should pick up.</summary>
     public int Version { get; set; } = CurrentVersion;
     const int CurrentVersion = 2;
+
     public float GlanceAngleDeg { get; set; } = 40f;
     public bool Haptics { get; set; } = true;
     public bool Lyrics { get; set; } = true;
@@ -48,17 +51,19 @@ public sealed class Settings
     {
         get
         {
-            // OpenXR grip: +X right for both hands, -Z along the pointing finger, +Y up the thumb.
-            // Left hand: the back of the hand is -X. Reading direction runs toward the fingers (-Z),
-            // and the top of the text points to the pinky (-Y) in the classic check-the-watch pose.
+            // OpenXR grip: +X right for both hands, -Z along the pointing finger, +Y up the thumb,
+            // so the back of the left hand is -X and the forearm runs along +Z. In the check-the-watch
+            // pose the text reads across the wrist with its top toward the elbow (confirmed in a
+            // headset: reading along the forearm came out 90 degrees off).
             float side = WatchHand == Hand.Left ? -1f : 1f;
             Vector3 normal = new(side, 0, 0);
-            Vector3 right = WatchHand == Hand.Left ? -Vector3.UnitZ : Vector3.UnitZ;
-            Vector3 up = Vector3.Cross(normal, right);
+            Vector3 up = Vector3.UnitZ;
+            Vector3 right = Vector3.Cross(up, normal);
             var basis = Pose.FromBasis(right, up, normal);
-            var tilt = Quaternion.CreateFromAxisAngle(right, side * TiltDeg * MathF.PI / 180f);
+            var tilt = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, TiltDeg * MathF.PI / 180f);
+            var roll = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, RollDeg * MathF.PI / 180f);
             var position = new Vector3(side * OffsetOutCm, OffsetThumbCm, OffsetElbowCm) / 100f;
-            return new Pose(position, Quaternion.Normalize(tilt * basis));
+            return new Pose(position, Quaternion.Normalize(tilt * basis * roll));
         }
     }
 

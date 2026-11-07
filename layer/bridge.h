@@ -60,7 +60,12 @@ struct Bridge {
     uint32_t poseSeq;          // 244
     char runtimeName[64];      // 248
     char appName[64];          // 312
-    uint8_t reserved1[kPixelOffset - 376];
+    float triggerLeft;         // 376 0..1, only while capturing
+    float triggerRight;        // 380
+    uint32_t captureInput;     // 384 host: 1 while the user points at the panel, the layer then
+                               //     takes the trigger from the game with a high-priority action set
+    uint32_t reserved2;        // 388
+    uint8_t reserved1[kPixelOffset - 392];
     // kPixelOffset: width * height BGRA, premultiplied alpha, tightly packed.
 };
 #pragma pack(pop)

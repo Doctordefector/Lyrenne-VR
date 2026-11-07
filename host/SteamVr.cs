@@ -21,7 +21,7 @@ public sealed class SteamVr : IDisposable
     bool _connected;
     long _nextAttempt;
     ulong _overlay;
-    ulong _set, _leftGrip, _rightGrip, _leftAim, _rightAim, _haptic, _leftSource, _rightSource;
+    ulong _set, _leftGrip, _rightGrip, _leftAim, _rightAim, _haptic, _leftSource, _rightSource, _leftTrigger, _rightTrigger;
     readonly TrackedDevicePose_t[] _devicePoses = new TrackedDevicePose_t[OpenVR.k_unMaxTrackedDeviceCount];
     uint _watchDevice = OpenVR.k_unTrackedDeviceIndexInvalid;
     Pose _watchDeviceFromGrip = Pose.Identity;
@@ -74,6 +74,8 @@ public sealed class SteamVr : IDisposable
             OpenVR.Input.GetActionHandle("/actions/lyrenne/in/left_aim", ref _leftAim);
             OpenVR.Input.GetActionHandle("/actions/lyrenne/in/right_aim", ref _rightAim);
             OpenVR.Input.GetActionHandle("/actions/lyrenne/out/haptic", ref _haptic);
+            OpenVR.Input.GetActionHandle("/actions/lyrenne/in/left_trigger", ref _leftTrigger);
+            OpenVR.Input.GetActionHandle("/actions/lyrenne/in/right_trigger", ref _rightTrigger);
             OpenVR.Input.GetInputSourceHandle("/user/hand/left", ref _leftSource);
             OpenVR.Input.GetInputSourceHandle("/user/hand/right", ref _rightSource);
 
@@ -175,7 +177,14 @@ public sealed class SteamVr : IDisposable
         {
             _watchDevice = OpenVR.k_unTrackedDeviceIndexInvalid;
         }
-        return new TrackingFrame(head, lg, rg, la, ra);
+        return new TrackingFrame(head, lg, rg, la, ra, Analog(_leftTrigger), Analog(_rightTrigger));
+    }
+
+    static float Analog(ulong action)
+    {
+        var data = new InputAnalogActionData_t();
+        var err = OpenVR.Input.GetAnalogActionData(action, ref data, (uint)Marshal.SizeOf<InputAnalogActionData_t>(), OpenVR.k_ulInvalidInputValueHandle);
+        return err == EVRInputError.None && data.bActive ? data.x : 0;
     }
 
     (Pose?, uint) ActionPose(ulong action)

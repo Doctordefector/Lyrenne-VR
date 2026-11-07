@@ -45,9 +45,10 @@ static class SelfTest
         var awayHead = new Pose(headPos, LookRotation(Vector3.Normalize(Vector3.Cross(normal, Vector3.UnitY))));
         var farPoker = new Pose(new Vector3(0, 0.8f, 0.2f), Quaternion.Identity);
 
+        float trigger = 0;
         TrackingFrame Frame(Pose h, Pose poker) => watchHand == Hand.Left
-            ? new TrackingFrame(h, grip, null, null, poker)
-            : new TrackingFrame(h, null, grip, poker, null);
+            ? new TrackingFrame(h, grip, null, null, poker, 0, trigger)
+            : new TrackingFrame(h, null, grip, poker, null, trigger, 0);
 
         void Run(Pose h, Pose poker, int ms)
         {
@@ -93,6 +94,41 @@ static class SelfTest
         Expect(taps == 2, "a hand passing straight through does not tap");
         Run(head, Poker(1300, 418, -0.004f), 50);
         Expect(taps == 2, "touching beside the panel does nothing");
+
+        // Laser: the poking controller 40 cm in front of the panel, aimed at a button.
+        Pose Laser(float px, float py)
+        {
+            float w = settings.PanelWidthM, h = w * Panel.Height / Panel.Width;
+            var target = panelWorld.Transform(new Vector3((px / Panel.Width - 0.5f) * w, (0.5f - py / Panel.Height) * h, 0));
+            var from = target + normal * 0.4f + Vector3.Normalize(Vector3.Cross(normal, Vector3.UnitY)) * 0.1f;
+            return new Pose(from, LookRotation(target - from));
+        }
+        trigger = 0;
+        Run(head, Laser(370, 414), 50);
+        Expect(wrist.Pointing && panel.Interacting && taps == 2, "pointing at play from 40 cm shows the cursor and asks for the trigger");
+        trigger = 0.9f;
+        Run(head, Laser(370, 414), 50);
+        Expect(taps == 3, "pulling the trigger clicks");
+        Run(head, Laser(370, 414), 100);
+        Expect(taps == 3, "holding the trigger does not repeat");
+        trigger = 0;
+        Run(head, Laser(508, 418), 50);
+        trigger = 0.9f;
+        Run(head, Laser(508, 418), 50);
+        Expect(taps == 4, "release and pull again clicks the next button");
+        trigger = 0;
+        Run(head, farPoker, 50);
+        Expect(!wrist.Pointing, "pointing away gives the trigger back to the game");
+        trigger = 0.9f;
+        Run(head, Laser(370, 414), 80);
+        Expect(taps == 4, "a trigger already held when the ray arrives does not click");
+        trigger = 0;
+        Run(head, Laser(370, 414), 30);
+        trigger = 0.9f;
+        Run(head, Laser(370, 414), 50);
+        Expect(taps == 5, "after letting go it clicks normally");
+        trigger = 0;
+        Run(head, farPoker, 30);
 
         Run(awayHead, farPoker, 150);
         Expect(wrist.Visible, "stays open through a short look away");

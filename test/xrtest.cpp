@@ -79,6 +79,7 @@ static int RealRuntime() {
     dir = dir.substr(0, dir.find_last_of(L'\\'));
     SetEnvironmentVariableW(L"XR_API_LAYER_PATH", (dir + L"\\..\\layer").c_str());
     SetEnvironmentVariableW(L"XR_ENABLE_API_LAYERS", L"XR_APILAYER_LYRENNE_wrist_player");
+    SetEnvironmentVariableW(L"DISABLE_XR_APILAYER_LYRENNE_wrist_player", L"1");
 
     uint32_t count = 0;
     xrEnumerateApiLayerProperties(0, &count, nullptr);
@@ -126,6 +127,8 @@ int main(int argc, char** argv) {
         if (!real) SetEnvironmentVariableW(L"XR_RUNTIME_JSON", (dir + L"\\mock_runtime.json").c_str());
         SetEnvironmentVariableW(L"XR_API_LAYER_PATH", (dir + L"\\..\\layer").c_str());
         SetEnvironmentVariableW(L"XR_ENABLE_API_LAYERS", L"XR_APILAYER_LYRENNE_wrist_player");
+        // An installed copy registered as an implicit layer would shadow the build under test.
+        SetEnvironmentVariableW(L"DISABLE_XR_APILAYER_LYRENNE_wrist_player", L"1");
         // Keep other installed implicit layers out of this test, and keep ours from loading twice
         // in case it is also registered as an implicit layer on this machine.
         if (!real) {
@@ -288,7 +291,7 @@ int main(int argc, char** argv) {
         return failures ? 1 : 0;
     }
 
-    int v[10] = {};
+    int v[12] = {};
     reinterpret_cast<void (*)(int*)>(GetProcAddress(mock, "MockReport"))(v);
     const char* space = reinterpret_cast<const char* (*)()>(GetProcAddress(mock, "MockQuadSpace"))();
     float geo[9] = {};
@@ -301,9 +304,10 @@ int main(int argc, char** argv) {
     printf("frames %d, frames with panel %d, panel %dx%d %s, space '%s'\n", v[4], v[5], v[7], v[8], v[9] ? "RGBA" : "BGRA", space);
     printf("quad %.3f x %.3f m, pose q(%.3f %.3f %.3f %.3f) p(%.3f %.3f %.3f)\n", geo[0], geo[1], geo[2], geo[3], geo[4], geo[5], geo[6], geo[7], geo[8]);
 
-    Expect(v[1] == 1 + 6, "game binding kept and our 4 poses + 2 haptics appended");
-    Expect(v[2] == 2, "our action set attached alongside the game's");
-    Expect(v[3] == 2, "our action set synced alongside the game's");
+    Expect(v[1] == 1 + 8, "game binding kept and our 4 poses, 2 haptics and 2 triggers appended");
+    Expect(v[2] == 3, "our pose set and click set attached alongside the game's");
+    Expect(v[11] == 3, "pointing at the panel switched the click set on");
+    Expect(v[10] > 0, "the layer read the trigger while pointing");
     Expect(v[5] > 0, "panel quad composited");
     Expect(strcmp(space, "hand_grip /user/hand/left") == 0, "quad locked to the left grip");
     Expect(std::fabs(geo[0] - 0.16f) < 0.001f && std::fabs(geo[1] - 0.08f) < 0.001f, "quad is 16 x 8 cm");

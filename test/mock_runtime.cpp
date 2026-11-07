@@ -15,6 +15,7 @@
 #include <openxr/openxr_platform.h>
 #include <openxr/openxr_loader_negotiation.h>
 
+#include <algorithm>
 #include <cstring>
 #include <map>
 #include <string>
@@ -67,6 +68,8 @@ struct Record {
     int attachCalls = 0;
     int lastSyncSetCount = 0;
     int hapticCalls = 0;
+    int clickReads = 0;      // xrGetActionStateFloat on the layer's panel_click action
+    int maxSyncSetCount = 0;
     int framesEnded = 0;
     int framesWithQuad = 0;
     std::string quadSpace;
@@ -164,10 +167,17 @@ XrResult XRAPI_CALL AttachSets(XrSession, const XrSessionActionSetsAttachInfo* i
 }
 XrResult XRAPI_CALL SyncActions(XrSession, const XrActionsSyncInfo* info) {
     gRecord.lastSyncSetCount = static_cast<int>(info->countActiveActionSets);
+    gRecord.maxSyncSetCount = std::max(gRecord.maxSyncSetCount, gRecord.lastSyncSetCount);
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL GetActionStateBoolean(XrSession, const XrActionStateGetInfo*, XrActionStateBoolean* s) {
     s->currentState = XR_FALSE;
+    s->isActive = XR_TRUE;
+    return XR_SUCCESS;
+}
+XrResult XRAPI_CALL GetActionStateFloat(XrSession, const XrActionStateGetInfo* gi, XrActionStateFloat* s) {
+    if (gActions[gi->action].name == "panel_click") gRecord.clickReads++;
+    s->currentState = 0;  // never actually click: that would toggle the real media player
     s->isActive = XR_TRUE;
     return XR_SUCCESS;
 }
@@ -214,6 +224,15 @@ XrResult XRAPI_CALL DestroySpace(XrSpace s) {
     gSpaces.erase(s);
     return XR_SUCCESS;
 }
+const XrVector3f kLeftHand{-0.15f, 1.25f, -0.35f};
+XrVector3f Add(XrVector3f a, XrVector3f b) { return {a.x + b.x, a.y + b.y, a.z + b.z}; }
+XrVector3f Rotate(const XrQuaternionf& q, XrVector3f v) {
+    XrVector3f u{q.x, q.y, q.z};
+    XrVector3f t{2 * (u.y * v.z - u.z * v.y), 2 * (u.z * v.x - u.x * v.z), 2 * (u.x * v.y - u.y * v.x)};
+    return {v.x + q.w * t.x + (u.y * t.z - u.z * t.y), v.y + q.w * t.y + (u.z * t.x - u.x * t.z),
+            v.z + q.w * t.z + (u.x * t.y - u.y * t.x)};
+}
+
 XrResult XRAPI_CALL LocateSpace(XrSpace space, XrSpace, XrTime, XrSpaceLocation* loc) {
     auto it = gSpaces.find(space);
     if (it == gSpaces.end()) return XR_ERROR_HANDLE_INVALID;
@@ -224,7 +243,16 @@ XrResult XRAPI_CALL LocateSpace(XrSpace space, XrSpace, XrTime, XrSpaceLocation*
     if (info.kind == SpaceKind::View) loc->pose.position = {0, 1.6f, 0};
     if (info.kind == SpaceKind::Action) {
         bool left = gPathNames[info.subaction] == "/user/hand/left";
-        loc->pose.position = left ? XrVector3f{-0.15f, 1.25f, -0.35f} : XrVector3f{0.25f, 1.1f, -0.3f};
+        loc->pose.position = left ? kLeftHand : XrVector3f{0.25f, 1.1f, -0.3f};
+        // Once the layer has drawn the panel, aim the right controller straight at its centre from
+        // 30 cm in front, the way a user would to click it with the trigger.
+        if (!left && gActions[info.action].name == "hand_aim" && gRecord.framesWithQuad > 0) {
+            const XrQuaternionf& q = gRecord.quadPose.orientation;
+            XrVector3f n = Rotate(q, {0, 0, 1});
+            XrVector3f c = Add(kLeftHand, gRecord.quadPose.position);  // left grip has no rotation
+            loc->pose.position = Add(c, {n.x * 0.3f, n.y * 0.3f, n.z * 0.3f});
+            loc->pose.orientation = q;  // aim -Z then points along -n, into the panel face
+        }
     }
     return XR_SUCCESS;
 }
@@ -437,6 +465,7 @@ XrResult XRAPI_CALL GetInstanceProcAddr(XrInstance, const char* name, PFN_xrVoid
         F("xrSyncActions", SyncActions),
         F("xrGetActionStateBoolean", GetActionStateBoolean),
         F("xrApplyHapticFeedback", ApplyHaptic),
+        F("xrGetActionStateFloat", GetActionStateFloat),
         F("xrCreateSession", CreateSession),
         F("xrDestroySession", DestroySession),
         F("xrBeginSession", BeginSession),
@@ -489,6 +518,8 @@ extern "C" __declspec(dllexport) void MockReport(int* values) {
     values[7] = static_cast<int>(gRecord.pixelWidth);
     values[8] = static_cast<int>(gRecord.pixelHeight);
     values[9] = gRecord.rgba ? 1 : 0;
+    values[10] = gRecord.clickReads;
+    values[11] = gRecord.maxSyncSetCount;
 }
 extern "C" __declspec(dllexport) const char* MockQuadSpace() { return gRecord.quadSpace.c_str(); }
 extern "C" __declspec(dllexport) void MockQuadGeometry(float* out) {

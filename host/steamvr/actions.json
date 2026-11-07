@@ -1,20 +1,61 @@
 {
   "default_bindings": [
-    { "controller_type": "vd_hand_controller", "binding_url": "bindings_vd_hand_controller.json" },
-    { "controller_type": "oculus_touch", "binding_url": "bindings_oculus_touch.json" },
-    { "controller_type": "knuckles", "binding_url": "bindings_knuckles.json" },
-    { "controller_type": "vive_controller", "binding_url": "bindings_vive_controller.json" },
-    { "controller_type": "generic", "binding_url": "bindings_generic.json" }
+    {
+      "controller_type": "vd_hand_controller",
+      "binding_url": "bindings_vd_hand_controller.json"
+    },
+    {
+      "controller_type": "oculus_touch",
+      "binding_url": "bindings_oculus_touch.json"
+    },
+    {
+      "controller_type": "knuckles",
+      "binding_url": "bindings_knuckles.json"
+    },
+    {
+      "controller_type": "vive_controller",
+      "binding_url": "bindings_vive_controller.json"
+    },
+    {
+      "controller_type": "generic",
+      "binding_url": "bindings_generic.json"
+    }
   ],
   "actions": [
-    { "name": "/actions/lyrenne/in/left_grip", "type": "pose" },
-    { "name": "/actions/lyrenne/in/right_grip", "type": "pose" },
-    { "name": "/actions/lyrenne/in/left_aim", "type": "pose" },
-    { "name": "/actions/lyrenne/in/right_aim", "type": "pose" },
-    { "name": "/actions/lyrenne/out/haptic", "type": "vibration" }
+    {
+      "name": "/actions/lyrenne/in/left_grip",
+      "type": "pose"
+    },
+    {
+      "name": "/actions/lyrenne/in/right_grip",
+      "type": "pose"
+    },
+    {
+      "name": "/actions/lyrenne/in/left_aim",
+      "type": "pose"
+    },
+    {
+      "name": "/actions/lyrenne/in/right_aim",
+      "type": "pose"
+    },
+    {
+      "name": "/actions/lyrenne/out/haptic",
+      "type": "vibration"
+    },
+    {
+      "name": "/actions/lyrenne/in/left_trigger",
+      "type": "vector1"
+    },
+    {
+      "name": "/actions/lyrenne/in/right_trigger",
+      "type": "vector1"
+    }
   ],
   "action_sets": [
-    { "name": "/actions/lyrenne", "usage": "leftright" }
+    {
+      "name": "/actions/lyrenne",
+      "usage": "leftright"
+    }
   ],
   "localization": [
     {
@@ -24,7 +65,9 @@
       "/actions/lyrenne/in/right_grip": "Right hand grip pose",
       "/actions/lyrenne/in/left_aim": "Left hand pointer pose",
       "/actions/lyrenne/in/right_aim": "Right hand pointer pose",
-      "/actions/lyrenne/out/haptic": "Tap feedback"
+      "/actions/lyrenne/out/haptic": "Tap feedback",
+      "/actions/lyrenne/in/left_trigger": "Left trigger (click the player)",
+      "/actions/lyrenne/in/right_trigger": "Right trigger (click the player)"
     }
   ]
 }

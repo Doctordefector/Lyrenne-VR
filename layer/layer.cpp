@@ -87,6 +87,7 @@ struct Dispatch {
     PFN_xrSuggestInteractionProfileBindings SuggestInteractionProfileBindings = nullptr;
     PFN_xrAttachSessionActionSets AttachSessionActionSets = nullptr;
     PFN_xrSyncActions SyncActions = nullptr;
+    PFN_xrGetActionStateFloat GetActionStateFloat = nullptr;
     PFN_xrApplyHapticFeedback ApplyHapticFeedback = nullptr;
     PFN_xrCreateSession CreateSession = nullptr;
     PFN_xrDestroySession DestroySession = nullptr;
@@ -124,6 +125,13 @@ struct State {
     XrActionSet actionSet = XR_NULL_HANDLE;
     XrAction gripAction = XR_NULL_HANDLE, aimAction = XR_NULL_HANDLE, hapticAction = XR_NULL_HANDLE;
     bool bindingsAccepted = false;
+    // Second set, high priority, active only while the user points at the panel: while it is
+    // active the runtime routes the trigger to us instead of the game.
+    XrActionSet captureSet = XR_NULL_HANDLE;
+    XrAction clickAction = XR_NULL_HANDLE;
+    XrPath leftTriggerPath = XR_NULL_PATH, rightTriggerPath = XR_NULL_PATH;
+    XrPath leftSelectPath = XR_NULL_PATH, rightSelectPath = XR_NULL_PATH;
+    volatile bool captureOn = false;
 
     XrSession session = XR_NULL_HANDLE;
     bool attached = false;
@@ -480,6 +488,19 @@ void PublishPoses(lyrenne::Bridge* b, XrTime time) {
     b->leftAim = la;
     b->rightAim = ra;
     b->poseFlags = flags;
+    float trig[2] = {0, 0};
+    if (gs.attached && gs.captureOn && gs.clickAction != XR_NULL_HANDLE) {
+        XrPath hands[2] = {gs.leftHand, gs.rightHand};
+        for (int i = 0; i < 2; i++) {
+            XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
+            gi.action = gs.clickAction;
+            gi.subactionPath = hands[i];
+            XrActionStateFloat st{XR_TYPE_ACTION_STATE_FLOAT};
+            if (Ok(next.GetActionStateFloat(gs.session, &gi, &st)) && st.isActive) trig[i] = st.currentState;
+        }
+    }
+    b->triggerLeft = trig[0];
+    b->triggerRight = trig[1];
     b->clientPid = GetCurrentProcessId();
     CopyName(b->runtimeName, gs.runtimeName);
     CopyName(b->appName, gs.appName);
@@ -522,20 +543,32 @@ XrResult XRAPI_CALL Hook_xrSuggestInteractionProfileBindings(XrInstance instance
     // Add our pose (and, where the profile has one, haptic) bindings to whatever the game suggests,
     // so our action set works on exactly the controllers the game supports. Never suggest a profile
     // on our own: that could make the runtime pick a profile the game has no bindings for.
-    std::vector<XrActionSuggestedBinding> withHaptics(suggested->suggestedBindings,
-                                                     suggested->suggestedBindings + suggested->countSuggestedBindings);
-    withHaptics.push_back({gs.gripAction, gs.leftGripPath});
-    withHaptics.push_back({gs.gripAction, gs.rightGripPath});
-    withHaptics.push_back({gs.aimAction, gs.leftAimPath});
-    withHaptics.push_back({gs.aimAction, gs.rightAimPath});
-    std::vector<XrActionSuggestedBinding> posesOnly = withHaptics;
-    withHaptics.push_back({gs.hapticAction, gs.leftHapticPath});
-    withHaptics.push_back({gs.hapticAction, gs.rightHapticPath});
+    // Most controllers have an analog trigger; the simple controller and some others only "select".
+    std::vector<XrActionSuggestedBinding> poses(suggested->suggestedBindings,
+                                               suggested->suggestedBindings + suggested->countSuggestedBindings);
+    poses.push_back({gs.gripAction, gs.leftGripPath});
+    poses.push_back({gs.gripAction, gs.rightGripPath});
+    poses.push_back({gs.aimAction, gs.leftAimPath});
+    poses.push_back({gs.aimAction, gs.rightAimPath});
+    auto plus = [](std::vector<XrActionSuggestedBinding> v, std::initializer_list<XrActionSuggestedBinding> more) {
+        v.insert(v.end(), more);
+        return v;
+    };
+    auto haptics = plus(poses, {{gs.hapticAction, gs.leftHapticPath}, {gs.hapticAction, gs.rightHapticPath}});
+    std::vector<std::vector<XrActionSuggestedBinding>> candidates;
+    if (gs.clickAction != XR_NULL_HANDLE) {
+        candidates.push_back(plus(haptics, {{gs.clickAction, gs.leftTriggerPath}, {gs.clickAction, gs.rightTriggerPath}}));
+        candidates.push_back(plus(haptics, {{gs.clickAction, gs.leftSelectPath}, {gs.clickAction, gs.rightSelectPath}}));
+    }
+    candidates.push_back(haptics);
+    if (gs.clickAction != XR_NULL_HANDLE)
+        candidates.push_back(plus(poses, {{gs.clickAction, gs.leftTriggerPath}, {gs.clickAction, gs.rightTriggerPath}}));
+    candidates.push_back(poses);
 
-    for (auto* list : {&withHaptics, &posesOnly}) {
+    for (auto& list : candidates) {
         XrInteractionProfileSuggestedBinding copy = *suggested;
-        copy.countSuggestedBindings = static_cast<uint32_t>(list->size());
-        copy.suggestedBindings = list->data();
+        copy.countSuggestedBindings = static_cast<uint32_t>(list.size());
+        copy.suggestedBindings = list.data();
         XrResult r = next.SuggestInteractionProfileBindings(instance, &copy);
         if (Ok(r)) {
             gs.bindingsAccepted = true;
@@ -551,6 +584,7 @@ XrResult XRAPI_CALL Hook_xrAttachSessionActionSets(XrSession session, const XrSe
 
     std::vector<XrActionSet> sets(info->actionSets, info->actionSets + info->countActionSets);
     sets.push_back(gs.actionSet);
+    if (gs.captureSet != XR_NULL_HANDLE) sets.push_back(gs.captureSet);
     XrSessionActionSetsAttachInfo copy = *info;
     copy.countActionSets = static_cast<uint32_t>(sets.size());
     copy.actionSets = sets.data();
@@ -580,6 +614,7 @@ XrResult XRAPI_CALL Hook_xrSyncActions(XrSession session, const XrActionsSyncInf
     if (!gs.attached || session != gs.session || !info) return next.SyncActions(session, info);
     std::vector<XrActiveActionSet> active(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
     active.push_back({gs.actionSet, XR_NULL_PATH});
+    if (gs.captureOn && gs.captureSet != XR_NULL_HANDLE) active.push_back({gs.captureSet, XR_NULL_PATH});
     XrActionsSyncInfo copy = *info;
     copy.countActiveActionSets = static_cast<uint32_t>(active.size());
     copy.activeActionSets = active.data();
@@ -647,6 +682,7 @@ XrResult XRAPI_CALL Hook_xrEndFrame(XrSession session, const XrFrameEndInfo* inf
         return next.EndFrame(session, info);
     }
 
+    gs.captureOn = b->captureInput != 0;
     PublishPoses(b, info->displayTime);
     ApplyHaptics(b);
 
@@ -686,6 +722,7 @@ XrResult XRAPI_CALL Hook_xrDestroyInstance(XrInstance instance) {
         if (instance == gs.instance) {
             if (gs.session != XR_NULL_HANDLE) DestroySessionObjects();
             if (gs.actionSet != XR_NULL_HANDLE) next.DestroyActionSet(gs.actionSet);
+            if (gs.captureSet != XR_NULL_HANDLE) next.DestroyActionSet(gs.captureSet);
             CloseBridge();
             gs = State{};
         }
@@ -729,6 +766,10 @@ void SetUpActions() {
     gs.rightAimPath = path("/user/hand/right/input/aim/pose");
     gs.leftHapticPath = path("/user/hand/left/output/haptic");
     gs.rightHapticPath = path("/user/hand/right/output/haptic");
+    gs.leftTriggerPath = path("/user/hand/left/input/trigger/value");
+    gs.rightTriggerPath = path("/user/hand/right/input/trigger/value");
+    gs.leftSelectPath = path("/user/hand/left/input/select/click");
+    gs.rightSelectPath = path("/user/hand/right/input/select/click");
 
     XrActionSetCreateInfo setInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
     strcpy_s(setInfo.actionSetName, "lyrenne_wrist_player");
@@ -756,7 +797,29 @@ void SetUpActions() {
         Log("xrCreateAction failed");
         next.DestroyActionSet(gs.actionSet);
         gs.actionSet = XR_NULL_HANDLE;
+        return;
     }
+
+    XrActionSetCreateInfo captureInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
+    strcpy_s(captureInfo.actionSetName, "lyrenne_wrist_player_click");
+    strcpy_s(captureInfo.localizedActionSetName, "Lyrenne Wrist Player clicks");
+    captureInfo.priority = 10000;
+    XrAction click = XR_NULL_HANDLE;
+    if (Ok(next.CreateActionSet(gs.instance, &captureInfo, &gs.captureSet))) {
+        XrActionCreateInfo ai{XR_TYPE_ACTION_CREATE_INFO};
+        strcpy_s(ai.actionName, "panel_click");
+        strcpy_s(ai.localizedActionName, "Click the wrist player");
+        ai.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+        ai.countSubactionPaths = 2;
+        ai.subactionPaths = hands;
+        if (Ok(next.CreateAction(gs.captureSet, &ai, &click))) {
+            gs.clickAction = click;
+        } else {
+            next.DestroyActionSet(gs.captureSet);
+            gs.captureSet = XR_NULL_HANDLE;
+        }
+    }
+    if (gs.captureSet == XR_NULL_HANDLE) Log("trigger clicks unavailable, finger touch only");
 }
 
 bool LoadDispatch(XrInstance instance) {
@@ -776,6 +839,7 @@ bool LoadDispatch(XrInstance instance) {
     LOAD(SuggestInteractionProfileBindings)
     LOAD(AttachSessionActionSets)
     LOAD(SyncActions)
+    LOAD(GetActionStateFloat)
     LOAD(ApplyHapticFeedback)
     LOAD(CreateSession)
     LOAD(DestroySession)

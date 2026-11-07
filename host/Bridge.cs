@@ -23,6 +23,7 @@ public sealed unsafe class Bridge : IDisposable
     const int OffPanelWidth = 36, OffPanelPose = 40, OffHapticSeq = 68, OffHapticHand = 72, OffHapticAmp = 76, OffHapticDur = 80;
     const int OffClientHeartbeat = 88, OffClientPid = 96, OffPoseFlags = 100, OffHead = 104, OffLeftGrip = 132, OffRightGrip = 160;
     const int OffLeftAim = 188, OffRightAim = 216, OffPoseSeq = 244, OffRuntime = 248, OffApp = 312;
+    const int OffTriggerLeft = 376, OffTriggerRight = 380, OffCapture = 384;
 
     readonly MemoryMappedFile _file;
     readonly MemoryMappedViewAccessor _view;
@@ -68,7 +69,8 @@ public sealed unsafe class Bridge : IDisposable
         uint flags = R<uint>(OffPoseFlags);
         Pose? Get(int off, uint bit) => (flags & bit) != 0 ? ReadPose(off) : null;
         return new TrackingFrame(
-            Get(OffHead, 1), Get(OffLeftGrip, 2), Get(OffRightGrip, 4), Get(OffLeftAim, 8), Get(OffRightAim, 16));
+            Get(OffHead, 1), Get(OffLeftGrip, 2), Get(OffRightGrip, 4), Get(OffLeftAim, 8), Get(OffRightAim, 16),
+            R<float>(OffTriggerLeft), R<float>(OffTriggerRight));
     }
 
     Pose ReadPose(int off)
@@ -102,6 +104,9 @@ public sealed unsafe class Bridge : IDisposable
         _frameSeq++;
         Volatile.Write(ref seq, _frameSeq);
     }
+
+    /// <summary>Asks the layer to take the trigger away from the game while the user points at the panel.</summary>
+    public void SetCapture(bool on) => W<uint>(OffCapture, on ? 1u : 0u);
 
     public void Haptic(Hand hand, float amplitude, float seconds)
     {
