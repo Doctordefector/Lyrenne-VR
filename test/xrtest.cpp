@@ -19,6 +19,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <share.h>
 #include <string>
 #include <vector>
 
@@ -335,7 +336,10 @@ int main(int argc, char** argv) {
         ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\LyrenneVR\\layer.log", logPath, MAX_PATH);
         FILE* lf = nullptr;
         bool fellBack = false;
-        if (!_wfopen_s(&lf, logPath, L"r") && lf) {
+        // Shared open: the layer in this same process holds the log open for writing, and
+        // _wfopen_s opens without sharing, so it would fail and the check would always miss.
+        lf = _wfsopen(logPath, L"r", _SH_DENYNO);
+        if (lf) {
             char line[512];
             DWORD pid = GetCurrentProcessId();
             char tag[32];
