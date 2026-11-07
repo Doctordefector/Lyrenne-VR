@@ -221,6 +221,8 @@ public sealed class Panel
     void DrawBackground(SKCanvas canvas)
     {
         var full = new SKRect(0, 0, Width, Height);
+        // Solid base so the game never shows through behind the text, artwork or not.
+        using (var basePaint = new SKPaint { Color = new SKColor(14, 15, 20) }) canvas.DrawRect(full, basePaint);
         if (_blurred != null)
         {
             using var p = new SKPaint { FilterQuality = SKFilterQuality.High };
