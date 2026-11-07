@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>LyrenneVR</AssemblyName>
+    <RootNamespace>LyrenneVR</RootNamespace>
+    <Version>1.0.0</Version>
+    <Product>Lyrenne VR</Product>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- Valve's generated bindings trip a lot of style warnings that are not ours to fix. -->
+    <NoWarn>$(NoWarn);CS0108;CS0414;CS0649;CS8600;CS8601;CS8602;CS8603;CS8604;CS8618;CS8605;CS8625;CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="2.88.9" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\third_party\openvr\openvr_api.cs" Link="ThirdParty\openvr_api.cs" />
+    <None Include="..\third_party\openvr\openvr_api.dll" Link="openvr_api.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="steamvr\**\*" CopyToOutputDirectory="PreserveNewest" LinkBase="steamvr" />
+  </ItemGroup>
+
+</Project>

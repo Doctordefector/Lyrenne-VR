@@ -1,0 +1,116 @@
+using System.Numerics;
+
+namespace LyrenneVR;
+
+/// <summary>
+/// LyrenneVR.exe --selftest: drives the wrist logic with synthetic poses (a head, a watch hand and a
+/// poking hand) and checks glance-to-open, look-away-to-close, hover, press, release and pass-through.
+/// </summary>
+static class SelfTest
+{
+    static int _failures;
+
+    static void Expect(bool ok, string what)
+    {
+        Console.WriteLine($"{(ok ? "ok  " : "FAIL")} {what}");
+        if (!ok) _failures++;
+    }
+
+    public static int Run()
+    {
+        foreach (var hand in new[] { Hand.Left, Hand.Right }) RunFor(hand);
+        Console.WriteLine(_failures == 0 ? "\nall checks passed" : $"\n{_failures} check(s) failed");
+        return _failures == 0 ? 0 : 1;
+    }
+
+    static void RunFor(Hand watchHand)
+    {
+        Console.WriteLine($"-- watch on the {watchHand.ToString().ToLowerInvariant()} hand");
+        var settings = new Settings { WatchHand = watchHand, Lyrics = false };
+        var panel = new Panel(new Media(settings), new Volume(), new Lyrics(), settings);
+        var wrist = new Wrist(settings, panel);
+        int taps = 0;
+        panel.Haptic += (_, _) => taps++;
+
+        // The watch hand somewhere in front of the chest, turned a bit, as in a real glance.
+        var grip = new Pose(new Vector3(watchHand == Hand.Left ? -0.12f : 0.12f, 1.25f, -0.32f),
+            Quaternion.Normalize(Quaternion.CreateFromYawPitchRoll(0.6f, -0.4f, 0.9f)));
+        var panelWorld = grip.Compose(settings.PanelOffset);
+        Vector3 normal = panelWorld.Rotate(Vector3.UnitZ);
+
+        // Head 35 cm in front of the panel face, looking straight at it.
+        var headPos = panelWorld.Position + normal * 0.35f;
+        var lookAt = LookRotation(-normal);
+        var head = new Pose(headPos, lookAt);
+        var awayHead = new Pose(headPos, LookRotation(Vector3.Normalize(Vector3.Cross(normal, Vector3.UnitY))));
+        var farPoker = new Pose(new Vector3(0, 0.8f, 0.2f), Quaternion.Identity);
+
+        TrackingFrame Frame(Pose h, Pose poker) => watchHand == Hand.Left
+            ? new TrackingFrame(h, grip, null, null, poker)
+            : new TrackingFrame(h, null, grip, poker, null);
+
+        void Run(Pose h, Pose poker, int ms)
+        {
+            long end = Environment.TickCount64 + ms;
+            do
+            {
+                wrist.Update(Frame(h, poker));
+                Thread.Sleep(10);
+            } while (Environment.TickCount64 < end);
+        }
+
+        Run(awayHead, farPoker, 300);
+        Expect(!wrist.Visible, "hidden while looking elsewhere");
+        Run(head, farPoker, 60);
+        Expect(!wrist.Visible, "a brief glance does not open it");
+        Run(head, farPoker, 300);
+        Expect(wrist.Visible, "opens when looking at the wrist");
+
+        // Fingertip on the play button, at a given distance in front of the panel face.
+        Pose Poker(float px, float py, float depth)
+        {
+            float w = settings.PanelWidthM, h = w * Panel.Height / Panel.Width;
+            var local = new Vector3((px / Panel.Width - 0.5f) * w, (0.5f - py / Panel.Height) * h, depth);
+            Vector3 tip = panelWorld.Transform(local);
+            // The aim pose points straight into the panel; the fingertip sits ahead of its origin.
+            var rot = LookRotation(-normal);
+            return new Pose(tip - Vector3.Transform(new Vector3(0, 0, -settings.FingertipCm / 100f), rot), rot);
+        }
+
+        Run(head, Poker(370, 414, 0.03f), 50);
+        Expect(panel.Interacting && taps == 0, "hovering 3 cm above play shows the cursor without tapping");
+        Run(head, Poker(370, 414, -0.004f), 50);
+        Expect(taps == 1, "touching play taps once");
+        Run(head, Poker(370, 414, -0.01f), 50);
+        Expect(taps == 1, "holding the finger in does not repeat");
+        Run(head, Poker(370, 414, 0.004f), 50);
+        Expect(taps == 1, "tiny lift inside the hysteresis does not re-tap");
+        Run(head, Poker(370, 414, 0.03f), 50);
+        Run(head, Poker(508, 418, -0.004f), 50);
+        Expect(taps == 2, "lifting and touching next taps again");
+        Run(head, Poker(508, 418, 0.03f), 50);
+        Run(head, Poker(508, 418, -0.09f), 50);
+        Expect(taps == 2, "a hand passing straight through does not tap");
+        Run(head, Poker(1300, 418, -0.004f), 50);
+        Expect(taps == 2, "touching beside the panel does nothing");
+
+        Run(awayHead, farPoker, 150);
+        Expect(wrist.Visible, "stays open through a short look away");
+        Run(awayHead, farPoker, 700);
+        Expect(!wrist.Visible, "closes after looking away");
+
+        settings.ForceShow = ShowMode.Always;
+        Run(awayHead, farPoker, 30);
+        Expect(wrist.Visible, "always mode shows it regardless of gaze");
+    }
+
+    /// <summary>Rotation whose -Z points along <paramref name="forward"/>, keeping +Y as close to world up as possible.</summary>
+    static Quaternion LookRotation(Vector3 forward)
+    {
+        Vector3 z = -Vector3.Normalize(forward);
+        Vector3 up = MathF.Abs(Vector3.Dot(z, Vector3.UnitY)) > 0.95f ? Vector3.UnitZ : Vector3.UnitY;
+        Vector3 x = Vector3.Normalize(Vector3.Cross(up, z));
+        Vector3 y = Vector3.Cross(z, x);
+        return Pose.FromBasis(x, y, z);
+    }
+}

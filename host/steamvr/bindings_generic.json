@@ -1,0 +1,19 @@
+{
+  "controller_type": "generic",
+  "name": "Lyrenne wrist player defaults",
+  "bindings": {
+    "/actions/lyrenne": {
+      "poses": [
+        { "output": "/actions/lyrenne/in/left_grip", "path": "/user/hand/left/pose/raw" },
+        { "output": "/actions/lyrenne/in/right_grip", "path": "/user/hand/right/pose/raw" },
+        { "output": "/actions/lyrenne/in/left_aim", "path": "/user/hand/left/pose/tip" },
+        { "output": "/actions/lyrenne/in/right_aim", "path": "/user/hand/right/pose/tip" }
+      ],
+      "haptics": [
+        { "output": "/actions/lyrenne/out/haptic", "path": "/user/hand/left/output/haptic" },
+        { "output": "/actions/lyrenne/out/haptic", "path": "/user/hand/right/output/haptic" }
+      ],
+      "sources": []
+    }
+  }
+}

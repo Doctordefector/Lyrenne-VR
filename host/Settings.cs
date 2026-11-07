@@ -1,0 +1,120 @@
+using System.Numerics;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace LyrenneVR;
+
+public enum ShowMode { Glance, Always, Hidden }
+
+/// <summary>User settings in %LOCALAPPDATA%\LyrenneVR\settings.json. Every field has a working default.</summary>
+public sealed class Settings
+{
+    /// <summary>The hand that wears the player. The other hand pokes it.</summary>
+    public Hand WatchHand { get; set; } = Hand.Left;
+    public ShowMode Show { get; set; } = ShowMode.Glance;
+
+    public float PanelWidthCm { get; set; } = 16f;
+    /// <summary>Panel center in the watch hand's grip space, in cm, mirrored for the right hand:
+    /// X out of the back of the hand, Y toward the thumb, Z toward the elbow.</summary>
+    public float OffsetOutCm { get; set; } = 3.5f;
+    public float OffsetThumbCm { get; set; } = 0f;
+    public float OffsetElbowCm { get; set; } = 12f;
+    /// <summary>Rolls the panel around the forearm, positive turns it toward the face in the usual glance pose.</summary>
+    public float TiltDeg { get; set; } = 15f;
+
+    /// <summary>How far ahead of the poking controller's aim origin the virtual fingertip sits, in cm.</summary>
+    public float FingertipCm { get; set; } = 1.5f;
+    public float GlanceAngleDeg { get; set; } = 40f;
+    public bool Haptics { get; set; } = true;
+    public bool Lyrics { get; set; } = true;
+    /// <summary>Only follow Lyrenne's media session instead of whatever Windows considers current.</summary>
+    public bool LyrenneOnly { get; set; } = false;
+    public bool SteamVrAutoLaunch { get; set; } = true;
+
+    /// <summary>Overrides <see cref="Show"/> for this run only (--always on the command line, used by tests).</summary>
+    [JsonIgnore] public ShowMode? ForceShow { get; set; }
+
+    [JsonIgnore] public Hand PokeHand => WatchHand == Hand.Left ? Hand.Right : Hand.Left;
+
+    /// <summary>Panel pose relative to the watch hand's OpenXR grip pose.</summary>
+    [JsonIgnore]
+    public Pose PanelOffset
+    {
+        get
+        {
+            // OpenXR grip: +X right for both hands, -Z along the pointing finger, +Y up the thumb.
+            // Left hand: the back of the hand is -X. Reading direction runs toward the fingers (-Z),
+            // and the top of the text points to the pinky (-Y) in the classic check-the-watch pose.
+            float side = WatchHand == Hand.Left ? -1f : 1f;
+            Vector3 normal = new(side, 0, 0);
+            Vector3 right = WatchHand == Hand.Left ? -Vector3.UnitZ : Vector3.UnitZ;
+            Vector3 up = Vector3.Cross(normal, right);
+            var basis = Pose.FromBasis(right, up, normal);
+            var tilt = Quaternion.CreateFromAxisAngle(right, side * TiltDeg * MathF.PI / 180f);
+            var position = new Vector3(side * OffsetOutCm, OffsetThumbCm, OffsetElbowCm) / 100f;
+            return new Pose(position, Quaternion.Normalize(tilt * basis));
+        }
+    }
+
+    [JsonIgnore] public float PanelWidthM => Math.Clamp(PanelWidthCm, 6f, 40f) / 100f;
+
+    static readonly JsonSerializerOptions Json = new()
+    {
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter() },
+    };
+
+    public static string Directory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LyrenneVR");
+    static string FilePath => Path.Combine(Directory, "settings.json");
+
+    public static Settings Load()
+    {
+        try
+        {
+            if (File.Exists(FilePath)) return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new Settings();
+        }
+        catch (Exception e)
+        {
+            Log.Write($"settings unreadable, using defaults: {e.Message}");
+        }
+        return new Settings();
+    }
+
+    public void Save()
+    {
+        try
+        {
+            System.IO.Directory.CreateDirectory(Directory);
+            File.WriteAllText(FilePath, JsonSerializer.Serialize(this, Json));
+        }
+        catch (Exception e)
+        {
+            Log.Write($"could not save settings: {e.Message}");
+        }
+    }
+
+    public Settings Clone() => (Settings)MemberwiseClone();
+}
+
+public static class Log
+{
+    static readonly object Lock = new();
+
+    public static void Write(string message)
+    {
+        lock (Lock)
+        {
+            try
+            {
+                System.IO.Directory.CreateDirectory(Settings.Directory);
+                string path = Path.Combine(Settings.Directory, "host.log");
+                if (File.Exists(path) && new FileInfo(path).Length > 1 << 20) File.Delete(path);
+                File.AppendAllText(path, $"{DateTime.Now:HH:mm:ss.fff} {message}{Environment.NewLine}");
+            }
+            catch
+            {
+                // Logging must never take the host down.
+            }
+        }
+    }
+}

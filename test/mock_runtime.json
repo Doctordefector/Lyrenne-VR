@@ -1,0 +1,7 @@
+{
+    "file_format_version": "1.0.0",
+    "runtime": {
+        "name": "Lyrenne Mock Runtime",
+        "library_path": "./mock_runtime.dll"
+    }
+}

@@ -1,0 +1,11 @@
+{
+    "file_format_version": "1.0.0",
+    "api_layer": {
+        "name": "XR_APILAYER_LYRENNE_wrist_player",
+        "library_path": "./XR_APILAYER_LYRENNE_wrist_player.dll",
+        "api_version": "1.0",
+        "implementation_version": "1",
+        "description": "Lyrenne wrist music player for OpenXR games",
+        "disable_environment": "DISABLE_XR_APILAYER_LYRENNE_wrist_player"
+    }
+}
