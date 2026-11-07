@@ -154,6 +154,17 @@ public sealed class Wrist
         return MathF.Atan2(Vector3.Dot(Vector3.Cross(headUp, panelUp), -view), Vector3.Dot(headUp, panelUp));
     }
 
+    long _lastDiagnosis;
+
+    /// <summary>Once a second while the panel is open: what the input side sees, for the log.</summary>
+    void Diagnose(string what)
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastDiagnosis < 1000) return;
+        _lastDiagnosis = now;
+        Log.Write("input: " + what);
+    }
+
     long _shownSince = -1;
     float _tiltSin, _tiltCos;
 
@@ -174,6 +185,7 @@ public sealed class Wrist
     {
         if (!_visible || panel is not { } p || f.Aim(_settings.PokeHand) is not { } aim)
         {
+            if (_visible) Diagnose($"no {_settings.PokeHand.ToString().ToLowerInvariant()} hand aim pose");
             Release();
             return;
         }
@@ -207,11 +219,14 @@ public sealed class Wrist
         // Keep a drag going when the ray slides off the edge with the trigger held.
         if (!hit && !(_triggerDown && origin.Z > 0 && dir.Z < 0))
         {
+            Diagnose($"laser off panel (aim {origin.Z * 100:0} cm in front, pointing {(dir.Z < -0.15f ? "at" : "away from")} it, " +
+                     $"hit at {at.X * 100:0.0},{at.Y * 100:0.0} cm), fingertip {tip.Z * 100:0.0} cm from face, trigger {f.Trigger(_settings.PokeHand):0.00}");
             Release();
             return;
         }
 
         float trigger = f.Trigger(_settings.PokeHand);
+        Diagnose($"laser on panel, trigger {trigger:0.00}");
         if (!Pointing)
         {
             Pointing = true;

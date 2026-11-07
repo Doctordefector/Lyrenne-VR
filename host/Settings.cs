@@ -129,8 +129,12 @@ public static class Log
 {
     static readonly object Lock = new();
 
+    /// <summary>Off during --selftest so synthetic glances and clicks never land in the user's log.</summary>
+    public static bool Enabled { get; set; } = true;
+
     public static void Write(string message)
     {
+        if (!Enabled) return;
         lock (Lock)
         {
             try

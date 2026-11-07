@@ -18,6 +18,7 @@ static class SelfTest
 
     public static int Run()
     {
+        Log.Enabled = false;
         foreach (var hand in new[] { Hand.Left, Hand.Right }) RunFor(hand);
         Console.WriteLine(_failures == 0 ? "\nall checks passed" : $"\n{_failures} check(s) failed");
         return _failures == 0 ? 0 : 1;
