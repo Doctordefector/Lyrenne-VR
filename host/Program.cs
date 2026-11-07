@@ -49,7 +49,14 @@ static class Program
             return 1;
         }
         Console.WriteLine("ok   connected to SteamVR as an overlay app");
-        var frame = steam.Poll();
+        // Input bindings take a few seconds to load after connecting; give controllers time to show up.
+        TrackingFrame? frame = null;
+        for (int i = 0; i < 100; i++)
+        {
+            frame = steam.Poll();
+            if (frame?.LeftGrip != null && frame.RightAim != null) break;
+            Thread.Sleep(100);
+        }
         Console.WriteLine($"{(frame?.Head != null ? "ok  " : "FAIL")} headset pose readable");
         Console.WriteLine($"     controllers: left grip {(frame?.LeftGrip != null ? "yes" : "no")}, right aim {(frame?.RightAim != null ? "yes" : "no")}");
 
