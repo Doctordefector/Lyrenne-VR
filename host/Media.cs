@@ -59,6 +59,9 @@ public sealed class Media : IDisposable
 
     public Media(Settings settings) => _settings = settings;
 
+    // Since startup, for timing how long song details take to arrive.
+    readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
+
     public async Task StartAsync()
     {
         try
@@ -69,7 +72,8 @@ public sealed class Media : IDisposable
             await PickSessionAsync();
             // Windows' change events do not always arrive (seen live: Lyrenne opened after the
             // host and was never picked up), so look again every few seconds as well.
-            _recheck = new System.Threading.Timer(_ => _ = PickSessionAsync(), null, 3000, 3000);
+            // Every second: it is one cheap call, and 3 s made a freshly opened Lyrenne feel slow.
+            _recheck = new System.Threading.Timer(_ => _ = PickSessionAsync(), null, 1000, 1000);
         }
         catch (Exception e)
         {
@@ -126,7 +130,7 @@ public sealed class Media : IDisposable
             Changed?.Invoke();
             return;
         }
-        Log.Write($"following media session {pick.SourceAppUserModelId}");
+        Log.Write($"following media session {pick.SourceAppUserModelId} (+{_clock.ElapsedMilliseconds} ms)");
         pick.MediaPropertiesChanged += OnMediaProperties;
         pick.PlaybackInfoChanged += OnPlaybackInfo;
         pick.TimelinePropertiesChanged += OnTimeline;
@@ -147,8 +151,26 @@ public sealed class Media : IDisposable
         lock (_lock) version = ++_metadataVersion;
         try
         {
+            long t0 = _clock.ElapsedMilliseconds;
             var props = await s.TryGetMediaPropertiesAsync();
             if (props == null) return;
+            string title = props.Title ?? "";
+            string artist = string.IsNullOrEmpty(props.Artist) ? props.AlbumArtist ?? "" : props.Artist;
+            string key = $"{artist}\u0001{title}";
+
+            // Text first: it is ready at once, the artwork can take a moment.
+            lock (_lock)
+            {
+                if (version != _metadataVersion || !ReferenceEquals(s, _session)) return;
+                bool sameTrack = key == $"{_artist}\u0001{_title}";
+                _title = title;
+                _artist = artist;
+                _album = props.AlbumTitle ?? "";
+                if (!sameTrack) _art = _artCache.TryGetValue(key, out var cached) ? cached : null;
+            }
+            Changed?.Invoke();
+            if (_artCache.TryGetValue(key, out var hit) && hit.Width >= 300) return;
+
             SKImage? art = null;
             if (props.Thumbnail != null)
             {
@@ -159,26 +181,49 @@ public sealed class Media : IDisposable
                     using var copy = new MemoryStream();
                     await net.CopyToAsync(copy);
                     art = SKImage.FromEncodedData(copy.ToArray());
+                    Log.Write($"song details +{_clock.ElapsedMilliseconds - t0} ms, artwork {art?.Width}x{art?.Height}");
                 }
                 catch (Exception e)
                 {
                     Log.Write($"artwork unreadable: {e.Message}");
                 }
             }
-            lock (_lock)
+            if (!SetArt(version, key, art)) return;
+
+            // Lyrenne hands Windows a 120 px thumbnail, soft on a 224 px tile. Look up the same
+            // album cover at 600 px; keep the thumbnail if nothing matches the artist.
+            if ((art == null || art.Width < 300) && !string.IsNullOrEmpty(artist))
             {
-                if (version != _metadataVersion || !ReferenceEquals(s, _session)) return;
-                _title = props.Title ?? "";
-                _artist = string.IsNullOrEmpty(props.Artist) ? props.AlbumArtist ?? "" : props.Artist;
-                _album = props.AlbumTitle ?? "";
-                _art = art;
+                var big = await Artwork.FindAsync(artist, title);
+                if (big != null)
+                {
+                    SetArt(version, key, big);
+                    Log.Write($"sharper artwork {big.Width}x{big.Height} +{_clock.ElapsedMilliseconds - t0} ms");
+                }
             }
-            Changed?.Invoke();
         }
         catch (Exception e)
         {
             Log.Write($"reading media properties failed: {e.Message}");
         }
+    }
+
+    readonly Dictionary<string, SKImage> _artCache = new();
+
+    bool SetArt(int version, string key, SKImage? art)
+    {
+        lock (_lock)
+        {
+            if (version != _metadataVersion || key != $"{_artist}\u0001{_title}") return false;
+            if (art != null)
+            {
+                if (_artCache.Count > 64) _artCache.Clear();
+                _artCache[key] = art;
+                _art = art;
+            }
+        }
+        Changed?.Invoke();
+        return true;
     }
 
     void OnPlaybackInfo(GlobalSystemMediaTransportControlsSession s, PlaybackInfoChangedEventArgs? _)

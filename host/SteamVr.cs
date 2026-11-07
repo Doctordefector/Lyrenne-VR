@@ -27,6 +27,7 @@ public sealed class SteamVr : IDisposable
     uint _watchDevice = OpenVR.k_unTrackedDeviceIndexInvalid;
     Pose _watchDeviceFromGrip = Pose.Identity;
     bool _shown;
+    bool _stale;
     long _bindingReportAt;
 
     ID3D11Device? _device;
@@ -279,9 +280,15 @@ public sealed class SteamVr : IDisposable
     {
         if (!_connected) return;
         bool show = visible && _watchDevice != OpenVR.k_unTrackedDeviceIndexInvalid;
+        // Frames drawn while hidden are uploaded the moment the panel shows.
+        if (frameChanged) _stale = true;
         if (show)
         {
-            if (frameChanged || _texture == null) Upload(premulBgra);
+            if (_stale || _texture == null)
+            {
+                Upload(premulBgra);
+                _stale = false;
+            }
             var deviceToPanel = _watchDeviceFromGrip.Compose(panelOffset);
             var m = ToMatrix(deviceToPanel);
             OpenVR.Overlay.SetOverlayTransformTrackedDeviceRelative(_overlay, _watchDevice, ref m);

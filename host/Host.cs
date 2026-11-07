@@ -51,6 +51,14 @@ public sealed class Host : IDisposable
 
     public void ApplySteamVrAutoLaunch() => _steam.ApplyAutoLaunch();
 
+    /// <summary>A faint tick on the watch hand as the player appears, so it can be felt opening.</summary>
+    void OnOpened()
+    {
+        if (!Settings.Haptics) return;
+        if (Source == Source.OpenXr) _bridge.Haptic(Settings.WatchHand, 0.15f, 0.012f);
+        else if (Source == Source.SteamVr) _steam.Haptic(Settings.WatchHand, 0.15f, 0.012f);
+    }
+
     void OnHaptic(float amplitude, float seconds)
     {
         if (!Settings.Haptics) return;
@@ -118,7 +126,10 @@ public sealed class Host : IDisposable
             Panel.CursorInTexture = Source == Source.OpenXr && !_bridge.LayerDrawsCursor;
             if (frame != null) _wrist.Update(frame);
             visible = frame != null && _wrist.Visible;
-            if (visible) changed = RenderIfNeeded();
+            // Keep the picture current while hidden too (at most once a second), so a glance shows
+            // the song that is playing now instead of drawing it first.
+            if (frame != null) changed = RenderIfNeeded(hidden: !visible);
+            if (visible && !_wasVisible) OnOpened();
         }
 
         var anchor = Settings.WatchHand == Hand.Left ? Anchor.LeftGrip : Anchor.RightGrip;
@@ -134,12 +145,13 @@ public sealed class Host : IDisposable
         TrackRenderStats(visible);
     }
 
-    bool RenderIfNeeded()
+    bool RenderIfNeeded(bool hidden)
     {
         var np = Media.Snapshot();
         string sig = Panel.Signature(np);
         long now = Environment.TickCount64;
         if (sig == _lastSignature && now - _lastRender < 1000) return false;
+        if (hidden && now - _lastRender < 1000) return false;
         _lastSignature = sig;
         _lastRender = now;
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
