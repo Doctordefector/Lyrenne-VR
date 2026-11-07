@@ -23,7 +23,13 @@ public sealed class Settings
     public float TiltDeg { get; set; } = 15f;
 
     /// <summary>How far ahead of the poking controller's aim origin the virtual fingertip sits, in cm.</summary>
-    public float FingertipCm { get; set; } = 1.5f;
+    /// <summary>Measured on Quest controllers under VDXR: the aim origin sits about 6 cm behind
+    /// the tip people actually touch with.</summary>
+    public float FingertipCm { get; set; } = 6f;
+
+    /// <summary>Bumped when a default changes in a way saved settings should pick up.</summary>
+    public int Version { get; set; } = CurrentVersion;
+    const int CurrentVersion = 2;
     public float GlanceAngleDeg { get; set; } = 40f;
     public bool Haptics { get; set; } = true;
     public bool Lyrics { get; set; } = true;
@@ -71,7 +77,13 @@ public sealed class Settings
     {
         try
         {
-            if (File.Exists(FilePath)) return JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new Settings();
+            if (File.Exists(FilePath))
+            {
+                var loaded = JsonSerializer.Deserialize<Settings>(File.ReadAllText(FilePath), Json) ?? new Settings();
+                if (loaded.Version < 2) loaded.FingertipCm = new Settings().FingertipCm;
+                loaded.Version = CurrentVersion;
+                return loaded;
+            }
         }
         catch (Exception e)
         {

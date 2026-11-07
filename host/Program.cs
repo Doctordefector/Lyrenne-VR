@@ -362,7 +362,7 @@ sealed class SettingsForm : Form
         Row("Toward the thumb", -10, 10, 0.25f, () => s.OffsetThumbCm, v => s.OffsetThumbCm = v, "cm");
         Row("Toward the elbow", -10, 25, 0.25f, () => s.OffsetElbowCm, v => s.OffsetElbowCm = v, "cm");
         Row("Tilt toward face", -60, 60, 1, () => s.TiltDeg, v => s.TiltDeg = v, "deg");
-        Row("Fingertip reach", -5, 8, 0.25f, () => s.FingertipCm, v => s.FingertipCm = v, "cm");
+        Row("Fingertip reach", -5, 14, 0.25f, () => s.FingertipCm, v => s.FingertipCm = v, "cm");
         Row("Glance angle", 15, 70, 1, () => s.GlanceAngleDeg, v => s.GlanceAngleDeg = v, "deg");
 
         var reset = new Button { Text = "Reset to defaults", AutoSize = true };
