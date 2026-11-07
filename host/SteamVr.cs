@@ -22,7 +22,7 @@ public sealed class SteamVr : IDisposable
     long _nextAttempt;
     ulong _overlay, _cursorOverlay;
     bool _cursorShown;
-    ulong _set, _leftGrip, _rightGrip, _leftAim, _rightAim, _haptic, _leftSource, _rightSource, _leftTrigger, _rightTrigger;
+    ulong _set, _clickSet, _leftGrip, _rightGrip, _leftAim, _rightAim, _haptic, _leftSource, _rightSource, _leftTrigger, _rightTrigger;
     readonly TrackedDevicePose_t[] _devicePoses = new TrackedDevicePose_t[OpenVR.k_unMaxTrackedDeviceCount];
     uint _watchDevice = OpenVR.k_unTrackedDeviceIndexInvalid;
     Pose _watchDeviceFromGrip = Pose.Identity;
@@ -38,6 +38,9 @@ public sealed class SteamVr : IDisposable
     public SteamVr(Settings settings) => _settings = settings;
 
     public bool Connected => _connected;
+
+    /// <summary>The user is pointing at the panel: take the trigger from the game until they stop.</summary>
+    public bool Capture { get; set; }
 
     /// <summary>Off for tests, so a test run never adds itself to the user's SteamVR startup list.</summary>
     public bool RegisterWithSteamVr { get; init; } = true;
@@ -72,13 +75,14 @@ public sealed class SteamVr : IDisposable
             var inputErr = OpenVR.Input.SetActionManifestPath(Path.Combine(dir, "steamvr", "actions.json"));
             if (inputErr != EVRInputError.None) Log.Write($"SteamVR action manifest: {inputErr}");
             OpenVR.Input.GetActionSetHandle("/actions/lyrenne", ref _set);
+            OpenVR.Input.GetActionSetHandle("/actions/lyrenne_click", ref _clickSet);
             OpenVR.Input.GetActionHandle("/actions/lyrenne/in/left_grip", ref _leftGrip);
             OpenVR.Input.GetActionHandle("/actions/lyrenne/in/right_grip", ref _rightGrip);
             OpenVR.Input.GetActionHandle("/actions/lyrenne/in/left_aim", ref _leftAim);
             OpenVR.Input.GetActionHandle("/actions/lyrenne/in/right_aim", ref _rightAim);
             OpenVR.Input.GetActionHandle("/actions/lyrenne/out/haptic", ref _haptic);
-            OpenVR.Input.GetActionHandle("/actions/lyrenne/in/left_trigger", ref _leftTrigger);
-            OpenVR.Input.GetActionHandle("/actions/lyrenne/in/right_trigger", ref _rightTrigger);
+            OpenVR.Input.GetActionHandle("/actions/lyrenne_click/in/left_trigger", ref _leftTrigger);
+            OpenVR.Input.GetActionHandle("/actions/lyrenne_click/in/right_trigger", ref _rightTrigger);
             OpenVR.Input.GetInputSourceHandle("/user/hand/left", ref _leftSource);
             OpenVR.Input.GetInputSourceHandle("/user/hand/right", ref _rightSource);
 
@@ -202,7 +206,15 @@ public sealed class SteamVr : IDisposable
             }
         }
 
-        var sets = new[] { new VRActiveActionSet_t { ulActionSet = _set } };
+        // While the user points at the panel the click set joins at global overlay priority, which
+        // makes SteamVR suppress the game's bindings on the trigger: a panel click does not fire.
+        var sets = Capture
+            ? new[]
+            {
+                new VRActiveActionSet_t { ulActionSet = _set },
+                new VRActiveActionSet_t { ulActionSet = _clickSet, nPriority = OpenVR.k_nActionSetOverlayGlobalPriorityMin + 100 },
+            }
+            : new[] { new VRActiveActionSet_t { ulActionSet = _set } };
         OpenVR.Input.UpdateActionState(sets, (uint)Marshal.SizeOf<VRActiveActionSet_t>());
         if (_bindingReportAt != 0 && Environment.TickCount64 > _bindingReportAt)
         {
@@ -242,7 +254,7 @@ public sealed class SteamVr : IDisposable
         foreach (var (name, action) in new[] { ("left grip", _leftGrip), ("right aim", _rightAim), ("left trigger", _leftTrigger), ("right trigger", _rightTrigger) })
         {
             var origins = new ulong[8];
-            OpenVR.Input.GetActionOrigins(_set, action, origins);
+            OpenVR.Input.GetActionOrigins(action == _leftTrigger || action == _rightTrigger ? _clickSet : _set, action, origins);
             var names = new List<string>();
             foreach (var o in origins)
             {

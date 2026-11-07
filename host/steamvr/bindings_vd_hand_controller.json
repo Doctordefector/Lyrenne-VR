@@ -31,13 +31,16 @@
           "path": "/user/hand/right/output/haptic"
         }
       ],
+      "sources": []
+    },
+    "/actions/lyrenne_click": {
       "sources": [
         {
           "mode": "trigger",
           "path": "/user/hand/left/input/index_pinch",
           "inputs": {
             "pull": {
-              "output": "/actions/lyrenne/in/left_trigger"
+              "output": "/actions/lyrenne_click/in/left_trigger"
             }
           }
         },
@@ -46,7 +49,7 @@
           "path": "/user/hand/left/input/trigger",
           "inputs": {
             "pull": {
-              "output": "/actions/lyrenne/in/left_trigger"
+              "output": "/actions/lyrenne_click/in/left_trigger"
             }
           }
         },
@@ -55,7 +58,7 @@
           "path": "/user/hand/right/input/index_pinch",
           "inputs": {
             "pull": {
-              "output": "/actions/lyrenne/in/right_trigger"
+              "output": "/actions/lyrenne_click/in/right_trigger"
             }
           }
         },
@@ -64,7 +67,7 @@
           "path": "/user/hand/right/input/trigger",
           "inputs": {
             "pull": {
-              "output": "/actions/lyrenne/in/right_trigger"
+              "output": "/actions/lyrenne_click/in/right_trigger"
             }
           }
         }

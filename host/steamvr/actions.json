@@ -43,17 +43,21 @@
       "type": "vibration"
     },
     {
-      "name": "/actions/lyrenne/in/left_trigger",
+      "name": "/actions/lyrenne_click/in/left_trigger",
       "type": "vector1"
     },
     {
-      "name": "/actions/lyrenne/in/right_trigger",
+      "name": "/actions/lyrenne_click/in/right_trigger",
       "type": "vector1"
     }
   ],
   "action_sets": [
     {
       "name": "/actions/lyrenne",
+      "usage": "leftright"
+    },
+    {
+      "name": "/actions/lyrenne_click",
       "usage": "leftright"
     }
   ],
@@ -66,8 +70,9 @@
       "/actions/lyrenne/in/left_aim": "Left hand pointer pose",
       "/actions/lyrenne/in/right_aim": "Right hand pointer pose",
       "/actions/lyrenne/out/haptic": "Tap feedback",
-      "/actions/lyrenne/in/left_trigger": "Left trigger (click the player)",
-      "/actions/lyrenne/in/right_trigger": "Right trigger (click the player)"
+      "/actions/lyrenne_click": "Lyrenne wrist player clicks (only while pointing at it)",
+      "/actions/lyrenne_click/in/left_trigger": "Left trigger (click the player)",
+      "/actions/lyrenne_click/in/right_trigger": "Right trigger (click the player)"
     }
   ]
 }

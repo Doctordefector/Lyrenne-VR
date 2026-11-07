@@ -136,6 +136,7 @@ public sealed class Host : IDisposable
         if (changed) _bridge.PublishFrame(_bitmap.GetPixelSpan(), Panel.Width, Panel.Height);
         _bridge.SetPanel(visible && Source == Source.OpenXr, anchor, _wrist.PanelOffset, _wrist.PanelWidth);
         _bridge.SetCapture((visible && _wrist.Pointing) || Settings.ForceCapture);
+        _steam.Capture = Source == Source.SteamVr && ((visible && _wrist.Pointing) || Settings.ForceCapture);
         var cursor = visible ? Panel.Cursor : null;
         float cursorSize = cursor is { } cur ? (cur.Pressed ? 0.008f : 0.009f + 0.011f * cur.Depth) * (_wrist.PanelWidth / 0.16f) : 0;
         var at = cursor?.At ?? default;
