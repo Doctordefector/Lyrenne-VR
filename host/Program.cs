@@ -10,6 +10,7 @@ static class Program
     {
         if (args.Length >= 2 && args[0] == "--render") return RenderToFile(args);
         if (args.Contains("--selftest")) return SelfTest.Run();
+        if (args.Contains("--bench")) return Bench.Run();
         if (args.Contains("--sessions")) return ListSessions();
         if (args.Length >= 2 && args[0] == "--ico") return WriteIco(args[1]);
         if (args.Length >= 2 && args[0] == "--logo")

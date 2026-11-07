@@ -205,12 +205,22 @@ public sealed class Panel
     {
         var (line, _) = _settings.Lyrics ? _lyrics.At(np) : (null, null);
         int progress = np.Duration > TimeSpan.Zero ? (int)(np.Position.TotalMilliseconds / np.Duration.TotalMilliseconds * 960) : 0;
-        string hover = _hover is { } h ? $"{(int)h.X / 3},{(int)h.Y / 3},{(int)(_hoverDepth * 12)}" : "-";
+        // The cursor is not part of the picture in VR (it is its own quad), so only what it is over
+        // matters here. Keying on its position re-rendered the whole panel on every hand tremor.
+        string hover = _hover is { } h && CursorInTexture ? $"{(int)h.X / 3},{(int)h.Y / 3},{(int)(_hoverDepth * 12)}"
+            : _hover != null ? "on" : "-";
         return string.Join('|', np.Title, np.Artist, np.Playing, np.Shuffle, np.Repeat, (int)np.Position.TotalSeconds, progress,
             np.Art?.UniqueId ?? 0, line, hover, _pressed, _active, _hot, (int)(_dragValue * 400), (int)(ReadVolume() * 200));
     }
 
-    public void Render(SKCanvas canvas, NowPlaying np)
+    /// <summary>Draw the cursor into the panel picture (an older layer that cannot draw it itself).</summary>
+    public bool CursorInTexture { get; set; }
+
+    /// <summary>The cursor in panel pixels and how close the fingertip is (0 touching, 1 far), or null.</summary>
+    public (SKPoint At, float Depth, bool Pressed)? Cursor => _hover is { } h ? (h, _hoverDepth, _pressed) : null;
+
+    /// <param name="drawCursor">Only for the desktop preview. In VR the cursor is a separate quad.</param>
+    public void Render(SKCanvas canvas, NowPlaying np, bool drawCursor = false)
     {
         canvas.Clear(SKColors.Transparent);
         UpdateArtwork(np.Art);
@@ -218,11 +228,22 @@ public sealed class Panel
         var card = new SKRoundRect(new SKRect(0, 0, Width, Height), 48);
         canvas.Save();
         canvas.ClipRoundRect(card, antialias: true);
-        DrawBackground(canvas);
+        // Backdrop and artwork only change with the track, and they are most of a redraw's cost
+        // (a full-panel image draw plus the art), so they are drawn once into a cached image.
+        if (_backdrop == null || !ReferenceEquals(_backdropArt, np.Art))
+        {
+            _backdrop?.Dispose();
+            _backdropArt = np.Art;
+            using var surface = SKSurface.Create(new SKImageInfo(Width, Height, SKColorType.Bgra8888, SKAlphaType.Premul));
+            DrawBackground(surface.Canvas);
+            DrawArt(surface.Canvas, np);
+            _backdrop = surface.Snapshot();
+        }
+        canvas.DrawImage(_backdrop, 0, 0);
         DrawHeader(canvas, np);
         DrawProgress(canvas, np);
         DrawControls(canvas, np);
-        DrawCursor(canvas);
+        if (drawCursor || CursorInTexture) DrawCursor(canvas);
         canvas.Restore();
 
         using var border = new SKPaint { IsAntialias = true, Style = SKPaintStyle.Stroke, StrokeWidth = 2, Color = SKColors.White.WithAlpha(34) };
@@ -285,7 +306,10 @@ public sealed class Panel
         canvas.DrawRect(full, shade);
     }
 
-    void DrawHeader(SKCanvas canvas, NowPlaying np)
+    SKImage? _backdrop;
+    SKImage? _backdropArt;
+
+    void DrawArt(SKCanvas canvas, NowPlaying np)
     {
         var artRect = new SKRect(36, 36, 260, 260);
         var artRound = new SKRoundRect(artRect, 26);
@@ -307,6 +331,10 @@ public sealed class Panel
             canvas.Restore();
         }
 
+    }
+
+    void DrawHeader(SKCanvas canvas, NowPlaying np)
+    {
         float x = 292, maxW = Width - x - 40;
         var (line, nextLine) = _settings.Lyrics ? _lyrics.At(np) : (null, null);
 

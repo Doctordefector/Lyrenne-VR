@@ -70,6 +70,9 @@ struct Record {
     int lastSyncSetCount = 0;
     int hapticCalls = 0;
     int clickReads = 0;      // xrGetActionStateFloat on the layer's panel_click action
+    int framesWithCursor = 0;
+    float cursorSize = 0;
+    XrPosef cursorPose{};
     int maxSyncSetCount = 0;
     int framesEnded = 0;
     int framesWithQuad = 0;
@@ -430,9 +433,17 @@ void ReadBack(Swapchain& sc) {
 
 XrResult XRAPI_CALL EndFrame(XrSession, const XrFrameEndInfo* info) {
     gRecord.framesEnded++;
+    int quads = 0;
     for (uint32_t i = 0; i < info->layerCount; i++) {
         if (info->layers[i]->type != XR_TYPE_COMPOSITION_LAYER_QUAD) continue;
         auto* q = reinterpret_cast<const XrCompositionLayerQuad*>(info->layers[i]);
+        if (++quads == 2) {
+            // The second quad is the layer's cursor.
+            gRecord.framesWithCursor++;
+            gRecord.cursorSize = q->size.width;
+            gRecord.cursorPose = q->pose;
+            continue;
+        }
         gRecord.framesWithQuad++;
         auto it = gSpaces.find(q->space);
         if (it == gSpaces.end()) gRecord.quadSpace = "unknown";
@@ -533,3 +544,8 @@ extern "C" __declspec(dllexport) void MockQuadGeometry(float* out) {
     memcpy(out + 2, &gRecord.quadPose, sizeof(XrPosef));
 }
 extern "C" __declspec(dllexport) const uint8_t* MockPixels() { return gRecord.pixels.data(); }
+extern "C" __declspec(dllexport) int MockCursor(float* out) {
+    out[0] = gRecord.cursorSize;
+    memcpy(out + 1, &gRecord.cursorPose, sizeof(XrPosef));
+    return gRecord.framesWithCursor;
+}

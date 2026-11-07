@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -115,6 +116,20 @@ Dispatch next;
 
 enum class Gfx { None, D3D11, D3D12 };
 
+// One swapchain the layer composites as a quad, with what it takes to upload pixels into it.
+struct Tex {
+    XrSwapchain swapchain = XR_NULL_HANDLE;
+    uint32_t width = 0, height = 0;
+    bool rgba = false;  // swapchain is RGBA, the pixels are BGRA
+    std::vector<ID3D11Texture2D*> images11;
+    std::vector<ID3D12Resource*> images12;
+    ID3D12Resource* upload = nullptr;
+    uint8_t* uploadPtr = nullptr;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint{};
+    bool hasContent = false;
+    uint32_t uploadedSeq = 0xFFFFFFFF;
+};
+
 struct State {
     XrInstance instance = XR_NULL_HANDLE;
     bool enabled = false;  // false under SteamVR or when anything essential failed
@@ -167,21 +182,13 @@ struct State {
     ID3D12CommandQueue* d3d12Queue = nullptr;
     ID3D12CommandAllocator* d3d12Allocator = nullptr;
     ID3D12GraphicsCommandList* d3d12List = nullptr;
-    ID3D12Resource* d3d12Upload = nullptr;
-    uint8_t* d3d12UploadPtr = nullptr;
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT d3d12Footprint{};
     ID3D12Fence* d3d12Fence = nullptr;
     HANDLE d3d12FenceEvent = nullptr;
     uint64_t d3d12FenceValue = 0;
 
-    XrSwapchain swapchain = XR_NULL_HANDLE;
-    uint32_t swapWidth = 0, swapHeight = 0;
-    bool swapRgba = false;  // swapchain is RGBA, the host writes BGRA
-    std::vector<ID3D11Texture2D*> images11;
-    std::vector<ID3D12Resource*> images12;
-    bool hasContent = false;
-    uint32_t uploadedSeq = 0xFFFFFFFF;
-    bool swapchainFailed = false;
+    Tex panel;   // the player, re-uploaded only when the host draws a new frame
+    Tex cursor;  // a small ring, uploaded once and only moved after that
+    bool texFailed = false;
 
     HANDLE mapping = nullptr;
     lyrenne::Bridge* bridge = nullptr;
@@ -249,14 +256,14 @@ void CopyName(char (&dst)[64], const std::string& src) {
 // ---------------------------------------------------------------------------------------------
 // Graphics
 
-void ReleaseSwapchain() {
-    if (gs.swapchain != XR_NULL_HANDLE) next.DestroySwapchain(gs.swapchain);
-    gs.swapchain = XR_NULL_HANDLE;
-    gs.images11.clear();
-    gs.images12.clear();
-    gs.hasContent = false;
-    gs.uploadedSeq = 0xFFFFFFFF;
-    gs.swapWidth = gs.swapHeight = 0;
+template <typename T>
+void SafeRelease(T*& p);
+
+void ReleaseTex(Tex& t) {
+    if (t.swapchain != XR_NULL_HANDLE) next.DestroySwapchain(t.swapchain);
+    if (t.upload && t.uploadPtr) t.upload->Unmap(0, nullptr);
+    SafeRelease(t.upload);
+    t = Tex{};
 }
 
 template <typename T>
@@ -266,14 +273,12 @@ void SafeRelease(T*& p) {
 }
 
 void ReleaseGraphics() {
-    ReleaseSwapchain();
     if (gs.d3d12Fence && gs.d3d12Queue && gs.d3d12FenceEvent && gs.d3d12Fence->GetCompletedValue() < gs.d3d12FenceValue) {
         gs.d3d12Fence->SetEventOnCompletion(gs.d3d12FenceValue, gs.d3d12FenceEvent);
         WaitForSingleObject(gs.d3d12FenceEvent, 1000);
     }
-    if (gs.d3d12Upload && gs.d3d12UploadPtr) gs.d3d12Upload->Unmap(0, nullptr);
-    gs.d3d12UploadPtr = nullptr;
-    SafeRelease(gs.d3d12Upload);
+    ReleaseTex(gs.panel);
+    ReleaseTex(gs.cursor);
     SafeRelease(gs.d3d12List);
     SafeRelease(gs.d3d12Allocator);
     SafeRelease(gs.d3d12Fence);
@@ -284,10 +289,10 @@ void ReleaseGraphics() {
     SafeRelease(gs.d3d11Context);
     SafeRelease(gs.d3d11);
     gs.gfx = Gfx::None;
-    gs.swapchainFailed = false;
+    gs.texFailed = false;
 }
 
-bool CreateSwapchain(uint32_t width, uint32_t height) {
+bool CreateTex(Tex& t, uint32_t width, uint32_t height) {
     uint32_t count = 0;
     if (!Ok(next.EnumerateSwapchainFormats(gs.session, 0, &count, nullptr)) || count == 0) return false;
     std::vector<int64_t> formats(count);
@@ -317,30 +322,30 @@ bool CreateSwapchain(uint32_t width, uint32_t height) {
     info.faceCount = 1;
     info.arraySize = 1;
     info.mipCount = 1;
-    XrResult r = next.CreateSwapchain(gs.session, &info, &gs.swapchain);
+    XrResult r = next.CreateSwapchain(gs.session, &info, &t.swapchain);
     if (!Ok(r)) {
         Log("xrCreateSwapchain failed: %d", r);
-        gs.swapchain = XR_NULL_HANDLE;
+        t.swapchain = XR_NULL_HANDLE;
         return false;
     }
 
     uint32_t imageCount = 0;
-    next.EnumerateSwapchainImages(gs.swapchain, 0, &imageCount, nullptr);
+    next.EnumerateSwapchainImages(t.swapchain, 0, &imageCount, nullptr);
     if (gs.gfx == Gfx::D3D11) {
         std::vector<XrSwapchainImageD3D11KHR> images(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
-        next.EnumerateSwapchainImages(gs.swapchain, imageCount, &imageCount,
+        next.EnumerateSwapchainImages(t.swapchain, imageCount, &imageCount,
                                       reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
-        for (auto& i : images) gs.images11.push_back(i.texture);
+        for (auto& i : images) t.images11.push_back(i.texture);
     } else {
         std::vector<XrSwapchainImageD3D12KHR> images(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
-        next.EnumerateSwapchainImages(gs.swapchain, imageCount, &imageCount,
+        next.EnumerateSwapchainImages(t.swapchain, imageCount, &imageCount,
                                       reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
-        for (auto& i : images) gs.images12.push_back(i.texture);
+        for (auto& i : images) t.images12.push_back(i.texture);
 
         // Upload buffer laid out for a buffer-to-texture copy into these images.
-        D3D12_RESOURCE_DESC desc = gs.images12[0]->GetDesc();
+        D3D12_RESOURCE_DESC desc = t.images12[0]->GetDesc();
         UINT64 total = 0;
-        gs.d3d12->GetCopyableFootprints(&desc, 0, 1, 0, &gs.d3d12Footprint, nullptr, nullptr, &total);
+        gs.d3d12->GetCopyableFootprints(&desc, 0, 1, 0, &t.footprint, nullptr, nullptr, &total);
         D3D12_HEAP_PROPERTIES heap{D3D12_HEAP_TYPE_UPLOAD};
         D3D12_RESOURCE_DESC buf{};
         buf.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -350,18 +355,17 @@ bool CreateSwapchain(uint32_t width, uint32_t height) {
         buf.MipLevels = 1;
         buf.SampleDesc.Count = 1;
         buf.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        SafeRelease(gs.d3d12Upload);
         if (FAILED(gs.d3d12->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buf, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                     IID_PPV_ARGS(&gs.d3d12Upload))) ||
-            FAILED(gs.d3d12Upload->Map(0, nullptr, reinterpret_cast<void**>(&gs.d3d12UploadPtr)))) {
+                                                     IID_PPV_ARGS(&t.upload))) ||
+            FAILED(t.upload->Map(0, nullptr, reinterpret_cast<void**>(&t.uploadPtr)))) {
             Log("D3D12 upload buffer failed");
-            ReleaseSwapchain();
+            ReleaseTex(t);
             return false;
         }
     }
-    gs.swapWidth = width;
-    gs.swapHeight = height;
-    gs.swapRgba = chosen == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || chosen == DXGI_FORMAT_R8G8B8A8_UNORM;
+    t.width = width;
+    t.height = height;
+    t.rgba = chosen == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || chosen == DXGI_FORMAT_R8G8B8A8_UNORM;
     Log("swapchain %ux%u format %lld, %u images", width, height, chosen, imageCount);
     return true;
 }
@@ -396,60 +400,38 @@ void SwizzleRows(const uint8_t* src, uint8_t* dst, uint32_t width, uint32_t heig
     }
 }
 
-// Copies a new frame out of the bridge, if there is one, and uploads it to the swapchain.
-void UploadIfChanged(lyrenne::Bridge* b) {
-    uint32_t seq = *reinterpret_cast<volatile uint32_t*>(&b->frameSeq);
-    if (seq == gs.uploadedSeq || (seq & 1)) return;
-    uint32_t width = b->width, height = b->height;
-    if (width == 0 || height == 0 || width > lyrenne::kMaxWidth || height > lyrenne::kMaxHeight) return;
-
-    if (gs.swapchain != XR_NULL_HANDLE && (gs.swapWidth != width || gs.swapHeight != height)) ReleaseSwapchain();
-    if (gs.swapchain == XR_NULL_HANDLE) {
-        if (gs.swapchainFailed) return;
-        if (!CreateSwapchain(width, height)) {
-            gs.swapchainFailed = true;
-            return;
-        }
-    }
-
-    // Seqlock read: take the pixels, then make sure the host did not start a new frame meanwhile.
-    size_t bytes = static_cast<size_t>(width) * height * 4;
-    gs.pixels.resize(bytes);
-    MemoryBarrier();
-    memcpy(gs.pixels.data(), reinterpret_cast<uint8_t*>(b) + lyrenne::kPixelOffset, bytes);
-    MemoryBarrier();
-    if (*reinterpret_cast<volatile uint32_t*>(&b->frameSeq) != seq) return;
-
+// Uploads tightly packed BGRA pixels into the next image of a swapchain.
+bool Upload(Tex& t, const uint8_t* pixels) {
     uint32_t index = 0;
-    if (!Ok(next.AcquireSwapchainImage(gs.swapchain, nullptr, &index))) return;
+    if (!Ok(next.AcquireSwapchainImage(t.swapchain, nullptr, &index))) return false;
     XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     wait.timeout = 100000000;  // 100 ms
-    if (!Ok(next.WaitSwapchainImage(gs.swapchain, &wait))) {
-        next.ReleaseSwapchainImage(gs.swapchain, nullptr);
-        return;
+    if (!Ok(next.WaitSwapchainImage(t.swapchain, &wait))) {
+        next.ReleaseSwapchainImage(t.swapchain, nullptr);
+        return false;
     }
 
     bool uploaded = false;
+    size_t bytes = static_cast<size_t>(t.width) * t.height * 4;
     if (gs.gfx == Gfx::D3D11) {
-        const uint8_t* src = gs.pixels.data();
+        const uint8_t* src = pixels;
         std::vector<uint8_t> swizzled;
-        if (gs.swapRgba) {
+        if (t.rgba) {
             swizzled.resize(bytes);
-            SwizzleRows(src, swizzled.data(), width, height, width * 4, true);
+            SwizzleRows(src, swizzled.data(), t.width, t.height, t.width * 4, true);
             src = swizzled.data();
         }
-        gs.d3d11Context->UpdateSubresource(gs.images11[index], 0, nullptr, src, width * 4, 0);
+        gs.d3d11Context->UpdateSubresource(t.images11[index], 0, nullptr, src, t.width * 4, 0);
         uploaded = true;
-    } else if (gs.gfx == Gfx::D3D12 && gs.d3d12UploadPtr) {
-        // The upload buffer is reused, so the previous copy has to be finished first.
+    } else if (gs.gfx == Gfx::D3D12 && t.uploadPtr) {
+        // The command allocator and upload buffers are reused, so the previous copy has to be done.
         if (gs.d3d12Fence->GetCompletedValue() < gs.d3d12FenceValue) {
             gs.d3d12Fence->SetEventOnCompletion(gs.d3d12FenceValue, gs.d3d12FenceEvent);
             WaitForSingleObject(gs.d3d12FenceEvent, 100);
         }
-        SwizzleRows(gs.pixels.data(), gs.d3d12UploadPtr + gs.d3d12Footprint.Offset, width, height,
-                    gs.d3d12Footprint.Footprint.RowPitch, gs.swapRgba);
+        SwizzleRows(pixels, t.uploadPtr + t.footprint.Offset, t.width, t.height, t.footprint.Footprint.RowPitch, t.rgba);
 
-        ID3D12Resource* image = gs.images12[index];
+        ID3D12Resource* image = t.images12[index];
         gs.d3d12Allocator->Reset();
         gs.d3d12List->Reset(gs.d3d12Allocator, nullptr);
         D3D12_RESOURCE_BARRIER barrier{};
@@ -461,8 +443,8 @@ void UploadIfChanged(lyrenne::Bridge* b) {
         gs.d3d12List->ResourceBarrier(1, &barrier);
         D3D12_TEXTURE_COPY_LOCATION dst{image, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
         dst.SubresourceIndex = 0;
-        D3D12_TEXTURE_COPY_LOCATION src{gs.d3d12Upload, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-        src.PlacedFootprint = gs.d3d12Footprint;
+        D3D12_TEXTURE_COPY_LOCATION src{t.upload, D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        src.PlacedFootprint = t.footprint;
         gs.d3d12List->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
         std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
         gs.d3d12List->ResourceBarrier(1, &barrier);
@@ -472,12 +454,71 @@ void UploadIfChanged(lyrenne::Bridge* b) {
         gs.d3d12Queue->Signal(gs.d3d12Fence, ++gs.d3d12FenceValue);
         uploaded = true;
     }
+    next.ReleaseSwapchainImage(t.swapchain, nullptr);
+    if (uploaded) t.hasContent = true;
+    return uploaded;
+}
 
-    next.ReleaseSwapchainImage(gs.swapchain, nullptr);
-    if (uploaded) {
-        gs.uploadedSeq = seq;
-        gs.hasContent = true;
+// Copies a new panel frame out of the bridge, if there is one, and uploads it.
+void UploadPanelIfChanged(lyrenne::Bridge* b) {
+    uint32_t seq = *reinterpret_cast<volatile uint32_t*>(&b->frameSeq);
+    if (seq == gs.panel.uploadedSeq || (seq & 1)) return;
+    uint32_t width = b->width, height = b->height;
+    if (width == 0 || height == 0 || width > lyrenne::kMaxWidth || height > lyrenne::kMaxHeight) return;
+
+    if (gs.panel.swapchain != XR_NULL_HANDLE && (gs.panel.width != width || gs.panel.height != height)) ReleaseTex(gs.panel);
+    if (gs.panel.swapchain == XR_NULL_HANDLE) {
+        if (gs.texFailed) return;
+        if (!CreateTex(gs.panel, width, height)) {
+            gs.texFailed = true;
+            return;
+        }
     }
+
+    // Seqlock read: take the pixels, then make sure the host did not start a new frame meanwhile.
+    size_t bytes = static_cast<size_t>(width) * height * 4;
+    gs.pixels.resize(bytes);
+    MemoryBarrier();
+    memcpy(gs.pixels.data(), reinterpret_cast<uint8_t*>(b) + lyrenne::kPixelOffset, bytes);
+    MemoryBarrier();
+    if (*reinterpret_cast<volatile uint32_t*>(&b->frameSeq) != seq) return;
+    if (Upload(gs.panel, gs.pixels.data())) gs.panel.uploadedSeq = seq;
+}
+
+// The cursor: a white ring with a dot, premultiplied BGRA, drawn once.
+constexpr uint32_t kCursorSize = 64;
+
+void EnsureCursor() {
+    if (gs.cursor.hasContent || gs.texFailed) return;
+    if (gs.cursor.swapchain == XR_NULL_HANDLE && !CreateTex(gs.cursor, kCursorSize, kCursorSize)) {
+        gs.texFailed = true;
+        return;
+    }
+    std::vector<uint8_t> px(kCursorSize * kCursorSize * 4);
+    const float c = (kCursorSize - 1) / 2.0f;
+    for (uint32_t y = 0; y < kCursorSize; y++) {
+        for (uint32_t x = 0; x < kCursorSize; x++) {
+            float d = std::sqrt((x - c) * (x - c) + (y - c) * (y - c));
+            // Ring between radius 22 and 29 with a soft dark halo outside it, dot inside 6.
+            float ring = std::clamp(1.0f - std::fabs(d - 25.5f) / 3.5f, 0.0f, 1.0f) * 1.6f;
+            float dot = std::clamp(6.5f - d, 0.0f, 1.0f);
+            float white = std::clamp(std::max(ring, dot), 0.0f, 1.0f);
+            float shadow = std::clamp(1.0f - std::fabs(d - 25.5f) / 6.0f, 0.0f, 1.0f) * 0.45f;
+            float a = std::clamp(white + shadow * (1 - white), 0.0f, 1.0f);
+            uint8_t v = static_cast<uint8_t>(white * 255.0f + 0.5f);  // premultiplied: color = white amount
+            uint8_t* p = &px[(y * kCursorSize + x) * 4];
+            p[0] = p[1] = p[2] = v;
+            p[3] = static_cast<uint8_t>(a * 255.0f + 0.5f);
+        }
+    }
+    Upload(gs.cursor, px.data());
+}
+
+XrVector3f Rotate(const XrQuaternionf& q, XrVector3f v) {
+    XrVector3f u{q.x, q.y, q.z};
+    XrVector3f t{2 * (u.y * v.z - u.z * v.y), 2 * (u.z * v.x - u.x * v.z), 2 * (u.x * v.y - u.y * v.x)};
+    return {v.x + q.w * t.x + (u.y * t.z - u.z * t.y), v.y + q.w * t.y + (u.z * t.x - u.x * t.z),
+            v.z + q.w * t.z + (u.x * t.y - u.y * t.x)};
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -597,6 +638,7 @@ void PublishPoses(lyrenne::Bridge* b, XrTime time) {
     b->leftAim = la;
     b->rightAim = ra;
     b->poseFlags = flags;
+    b->layerFeatures = lyrenne::FeatureCursorQuad;
     float trig[2] = {0, 0};
     ReadTrigger(trig);
     b->triggerLeft = trig[0];
@@ -813,22 +855,39 @@ XrResult XRAPI_CALL Hook_xrEndFrame(XrSession session, const XrFrameEndInfo* inf
     ApplyHaptics(b);
 
     XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-    bool show = false;
+    XrCompositionLayerQuad cursor{XR_TYPE_COMPOSITION_LAYER_QUAD};
+    bool show = false, showCursor = false;
     if (b->visible && gs.gfx != Gfx::None) {
-        UploadIfChanged(b);
+        UploadPanelIfChanged(b);
         XrSpace anchor = b->anchor == lyrenne::AnchorLeftGrip ? gs.leftGrip
                          : b->anchor == lyrenne::AnchorRightGrip ? gs.rightGrip
                                                                  : gs.localSpace;
-        if (gs.hasContent && anchor != XR_NULL_HANDLE && info->layerCount < gs.maxLayers) {
+        if (gs.panel.hasContent && anchor != XR_NULL_HANDLE && info->layerCount < gs.maxLayers) {
             quad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
             quad.space = anchor;
             quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-            quad.subImage.swapchain = gs.swapchain;
-            quad.subImage.imageRect = {{0, 0}, {static_cast<int32_t>(gs.swapWidth), static_cast<int32_t>(gs.swapHeight)}};
+            quad.subImage.swapchain = gs.panel.swapchain;
+            quad.subImage.imageRect = {{0, 0}, {static_cast<int32_t>(gs.panel.width), static_cast<int32_t>(gs.panel.height)}};
             memcpy(&quad.pose, &b->panelPose, sizeof(quad.pose));
             quad.size.width = b->panelWidthM;
-            quad.size.height = b->panelWidthM * gs.swapHeight / gs.swapWidth;
+            quad.size.height = b->panelWidthM * gs.panel.height / gs.panel.width;
             show = true;
+
+            // The cursor rides on its own small quad just in front of the panel, so moving it costs
+            // a pose change instead of a redraw and a 2 MB upload of the whole panel.
+            if (b->cursorVisible && info->layerCount + 1 < gs.maxLayers) {
+                EnsureCursor();
+                if (gs.cursor.hasContent) {
+                    XrVector3f offset{(b->cursorU - 0.5f) * quad.size.width, (0.5f - b->cursorV) * quad.size.height, 0.002f};
+                    XrVector3f r = Rotate(quad.pose.orientation, offset);
+                    cursor = quad;
+                    cursor.subImage.swapchain = gs.cursor.swapchain;
+                    cursor.subImage.imageRect = {{0, 0}, {static_cast<int32_t>(kCursorSize), static_cast<int32_t>(kCursorSize)}};
+                    cursor.pose.position = {quad.pose.position.x + r.x, quad.pose.position.y + r.y, quad.pose.position.z + r.z};
+                    cursor.size = {b->cursorSizeM, b->cursorSizeM};
+                    showCursor = true;
+                }
+            }
         }
     }
     lock.unlock();
@@ -836,6 +895,7 @@ XrResult XRAPI_CALL Hook_xrEndFrame(XrSession session, const XrFrameEndInfo* inf
     if (!show) return next.EndFrame(session, info);
     std::vector<const XrCompositionLayerBaseHeader*> layers(info->layers, info->layers + info->layerCount);
     layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad));
+    if (showCursor) layers.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cursor));
     XrFrameEndInfo copy = *info;
     copy.layerCount = static_cast<uint32_t>(layers.size());
     copy.layers = layers.data();

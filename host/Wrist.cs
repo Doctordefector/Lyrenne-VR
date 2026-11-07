@@ -271,8 +271,9 @@ public sealed class Wrist
     /// </summary>
     sealed class OneEuro
     {
-        const float MinCutoff = 1.0f;   // Hz, at rest
-        const float Beta = 0.008f;      // how fast the cutoff opens with speed (per px/s)
+        // Tuned for responsiveness after "laggy" feedback: 1 Hz at rest trailed the hand visibly.
+        const float MinCutoff = 2.5f;   // Hz, at rest
+        const float Beta = 0.03f;       // how fast the cutoff opens with speed (per px/s)
         const float DerivCutoff = 1.0f;
         float _x, _dx;
         long _at = -1;

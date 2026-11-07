@@ -20,7 +20,8 @@ public sealed class SteamVr : IDisposable
     readonly Settings _settings;
     bool _connected;
     long _nextAttempt;
-    ulong _overlay;
+    ulong _overlay, _cursorOverlay;
+    bool _cursorShown;
     ulong _set, _leftGrip, _rightGrip, _leftAim, _rightAim, _haptic, _leftSource, _rightSource, _leftTrigger, _rightTrigger;
     readonly TrackedDevicePose_t[] _devicePoses = new TrackedDevicePose_t[OpenVR.k_unMaxTrackedDeviceCount];
     uint _watchDevice = OpenVR.k_unTrackedDeviceIndexInvalid;
@@ -89,6 +90,7 @@ public sealed class SteamVr : IDisposable
             }
             OpenVR.Overlay.SetOverlayWidthInMeters(_overlay, _settings.PanelWidthM);
             OpenVR.Overlay.SetOverlaySortOrder(_overlay, 100);
+            CreateCursorOverlay();
 
             if (RegisterWithSteamVr) RegisterManifest(dir);
             _connected = true;
@@ -102,6 +104,47 @@ public sealed class SteamVr : IDisposable
             Log.Write($"SteamVR setup failed: {e.Message}");
             Disconnect();
             return false;
+        }
+    }
+
+    /// <summary>
+    /// The cursor is its own small overlay so moving it is a transform change, not a re-upload of
+    /// the whole panel texture. Its 64 px ring is uploaded once.
+    /// </summary>
+    void CreateCursorOverlay()
+    {
+        if (OpenVR.Overlay.CreateOverlay(AppKey + ".cursor", "Lyrenne cursor", ref _cursorOverlay) != EVROverlayError.None)
+        {
+            _cursorOverlay = 0;
+            return;
+        }
+        OpenVR.Overlay.SetOverlaySortOrder(_cursorOverlay, 101);
+        const int n = 64;
+        var px = new byte[n * n * 4];
+        float c = (n - 1) / 2f;
+        for (int y = 0; y < n; y++)
+            for (int x = 0; x < n; x++)
+            {
+                float d = MathF.Sqrt((x - c) * (x - c) + (y - c) * (y - c));
+                float ring = Math.Clamp(1 - MathF.Abs(d - 25.5f) / 3.5f, 0, 1) * 1.6f;
+                float dot = Math.Clamp(6.5f - d, 0, 1);
+                float white = Math.Clamp(MathF.Max(ring, dot), 0, 1);
+                float shadow = Math.Clamp(1 - MathF.Abs(d - 25.5f) / 6f, 0, 1) * 0.45f;
+                float a = Math.Clamp(white + shadow * (1 - white), 0, 1);
+                // Straight alpha (OpenVR does not premultiply): the color is white over its own alpha.
+                byte v = a > 0 ? (byte)Math.Clamp(white / a * 255, 0, 255) : (byte)0;
+                int i = (y * n + x) * 4;
+                px[i] = px[i + 1] = px[i + 2] = v;
+                px[i + 3] = (byte)(a * 255);
+            }
+        var handle = GCHandle.Alloc(px, GCHandleType.Pinned);
+        try
+        {
+            OpenVR.Overlay.SetOverlayRaw(_cursorOverlay, handle.AddrOfPinnedObject(), n, n, 4);
+        }
+        finally
+        {
+            handle.Free();
         }
     }
 
@@ -231,7 +274,8 @@ public sealed class SteamVr : IDisposable
         return (ToPose(data.pose.mDeviceToAbsoluteTracking), device);
     }
 
-    public void Present(bool visible, Pose panelOffset, float widthMeters, ReadOnlySpan<byte> premulBgra, bool frameChanged)
+    public void Present(bool visible, Pose panelOffset, float widthMeters, ReadOnlySpan<byte> premulBgra, bool frameChanged,
+        (float U, float V, float Size)? cursor = null)
     {
         if (!_connected) return;
         bool show = visible && _watchDevice != OpenVR.k_unTrackedDeviceIndexInvalid;
@@ -248,6 +292,22 @@ public sealed class SteamVr : IDisposable
             if (show) OpenVR.Overlay.ShowOverlay(_overlay);
             else OpenVR.Overlay.HideOverlay(_overlay);
             _shown = show;
+        }
+
+        bool showCursor = show && cursor != null && _cursorOverlay != 0;
+        if (showCursor && cursor is { } c)
+        {
+            float h = widthMeters * Panel.Height / Panel.Width;
+            var onPanel = new Pose(new Vector3((c.U - 0.5f) * widthMeters, (0.5f - c.V) * h, 0.002f), Quaternion.Identity);
+            var m = ToMatrix(_watchDeviceFromGrip.Compose(panelOffset).Compose(onPanel));
+            OpenVR.Overlay.SetOverlayTransformTrackedDeviceRelative(_cursorOverlay, _watchDevice, ref m);
+            OpenVR.Overlay.SetOverlayWidthInMeters(_cursorOverlay, c.Size);
+        }
+        if (showCursor != _cursorShown && _cursorOverlay != 0)
+        {
+            if (showCursor) OpenVR.Overlay.ShowOverlay(_cursorOverlay);
+            else OpenVR.Overlay.HideOverlay(_cursorOverlay);
+            _cursorShown = showCursor;
         }
     }
 
@@ -322,12 +382,15 @@ public sealed class SteamVr : IDisposable
         try
         {
             if (_overlay != 0) OpenVR.Overlay?.DestroyOverlay(_overlay);
+            if (_cursorOverlay != 0) OpenVR.Overlay?.DestroyOverlay(_cursorOverlay);
         }
         catch
         {
             // SteamVR may already be gone.
         }
         _overlay = 0;
+        _cursorOverlay = 0;
+        _cursorShown = false;
         _connected = false;
         _shown = false;
         OpenVR.Shutdown();

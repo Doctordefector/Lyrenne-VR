@@ -357,12 +357,13 @@ int main(int argc, char** argv) {
         int w = v[7], h = v[8];
         auto at = [&](int x, int y) { return px + (static_cast<size_t>(y) * w + x) * 4; };
         Expect(at(w * 3 / 4, h / 2)[3] == 255, "panel body is opaque");
-        // The mock aims the right controller at the panel's centre: the laser cursor ring must be there.
+        // The cursor is not in the panel texture any more (it is its own quad), so the panel centre
+        // must be plain card: no ring baked in that would need a full redraw to move.
         int ring = 0;
         for (int y = h / 2 - 30; y < h / 2 + 30; y++)
             for (int x = w / 2 - 30; x < w / 2 + 30; x++)
                 if (at(x, y)[0] > 120 && at(x, y)[1] > 120 && at(x, y)[2] > 120) ring++;
-        Expect(ring > 60, "laser cursor drawn where the controller points");
+        Expect(ring == 0, "the cursor is not baked into the panel texture");
         Expect(at(2, 2)[3] == 0, "rounded corner is transparent");
         int bright = 0;
         for (int y = 60; y < 110; y++)
@@ -376,6 +377,16 @@ int main(int argc, char** argv) {
     xrEndSession(session);
     xrDestroySession(session);
     xrDestroyInstance(instance);
+    // The cursor quad: aimed at the panel's centre, it must sit at the panel pose (+2 mm forward).
+    float cur[8] = {};
+    int cursorFrames = reinterpret_cast<int (*)(float*)>(GetProcAddress(mock, "MockCursor"))(cur);
+    printf("cursor quad in %d frames, %.4f m, at (%.4f %.4f %.4f)\n", cursorFrames, cur[0], cur[5], cur[6], cur[7]);
+    Expect(cursorFrames > 0, "the cursor is composited as its own quad");
+    float dx = cur[5] - geo[6], dy = cur[6] - geo[7], dz = cur[7] - geo[8];
+    float off = std::sqrt(dx * dx + dy * dy + dz * dz);
+    Expect(off < 0.006f, "the cursor quad sits where the controller points (panel centre)");
+    Expect(cur[0] > 0.004f && cur[0] < 0.03f, "the cursor quad is a few millimetres to a few centimetres wide");
+
     printf(failures ? "\n%d check(s) failed\n" : "\nall checks passed\n", failures);
     return failures ? 1 : 0;
 }

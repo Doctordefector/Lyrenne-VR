@@ -74,7 +74,9 @@ public sealed class Host : IDisposable
                     Log.Write($"tick failed: {e}");
                     Thread.Sleep(500);
                 }
-                Thread.Sleep(Source == Source.None ? 200 : 8);
+                // Poses arrive once per game frame (11 ms at 90 Hz); a 3 ms tick picks each one up
+                // within a few ms instead of up to a whole frame late.
+                Thread.Sleep(Source == Source.None ? 200 : 3);
             }
         }
         finally
@@ -113,6 +115,7 @@ public sealed class Host : IDisposable
         bool changed = false;
         lock (PanelLock)
         {
+            Panel.CursorInTexture = Source == Source.OpenXr && !_bridge.LayerDrawsCursor;
             if (frame != null) _wrist.Update(frame);
             visible = frame != null && _wrist.Visible;
             if (visible) changed = RenderIfNeeded();
@@ -122,7 +125,13 @@ public sealed class Host : IDisposable
         if (changed) _bridge.PublishFrame(_bitmap.GetPixelSpan(), Panel.Width, Panel.Height);
         _bridge.SetPanel(visible && Source == Source.OpenXr, anchor, _wrist.PanelOffset, _wrist.PanelWidth);
         _bridge.SetCapture((visible && _wrist.Pointing) || Settings.ForceCapture);
-        _steam.Present(visible && Source == Source.SteamVr, _wrist.PanelOffset, _wrist.PanelWidth, _bitmap.GetPixelSpan(), changed);
+        var cursor = visible ? Panel.Cursor : null;
+        float cursorSize = cursor is { } cur ? (cur.Pressed ? 0.008f : 0.009f + 0.011f * cur.Depth) * (_wrist.PanelWidth / 0.16f) : 0;
+        var at = cursor?.At ?? default;
+        _bridge.SetCursor(cursor != null && Source == Source.OpenXr, at.X / Panel.Width, at.Y / Panel.Height, cursorSize);
+        _steam.Present(visible && Source == Source.SteamVr, _wrist.PanelOffset, _wrist.PanelWidth, _bitmap.GetPixelSpan(), changed,
+            cursor is { } c2 ? (c2.At.X / Panel.Width, c2.At.Y / Panel.Height, cursorSize) : null);
+        TrackRenderStats(visible);
     }
 
     bool RenderIfNeeded()
@@ -133,10 +142,35 @@ public sealed class Host : IDisposable
         if (sig == _lastSignature && now - _lastRender < 1000) return false;
         _lastSignature = sig;
         _lastRender = now;
+        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         using var canvas = new SKCanvas(_bitmap);
         Panel.Render(canvas, np);
         canvas.Flush();
+        _renders++;
+        _renderTicks += System.Diagnostics.Stopwatch.GetTimestamp() - t0;
         return true;
+    }
+
+    int _renders;
+    long _renderTicks, _shownAt;
+    bool _wasVisible;
+
+    /// <summary>One log line per glance: how often the panel was redrawn and what each redraw cost.</summary>
+    void TrackRenderStats(bool visible)
+    {
+        if (visible && !_wasVisible)
+        {
+            _shownAt = Environment.TickCount64;
+            _renders = 0;
+            _renderTicks = 0;
+        }
+        else if (!visible && _wasVisible && _renders > 0)
+        {
+            double secs = Math.Max((Environment.TickCount64 - _shownAt) / 1000.0, 0.001);
+            double ms = _renderTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency / _renders;
+            Log.Write($"panel redrawn {_renders} times in {secs:0.0} s ({_renders / secs:0.0}/s), {ms:0.0} ms each");
+        }
+        _wasVisible = visible;
     }
 
     /// <summary>Renders the current panel to a new image, for the desktop preview and screenshots.</summary>
@@ -146,7 +180,7 @@ public sealed class Host : IDisposable
         {
             var info = new SKImageInfo(Panel.Width, Panel.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
             using var surface = SKSurface.Create(info);
-            Panel.Render(surface.Canvas, Media.Snapshot());
+            Panel.Render(surface.Canvas, Media.Snapshot(), drawCursor: true);
             return surface.Snapshot();
         }
     }

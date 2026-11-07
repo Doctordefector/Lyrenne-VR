@@ -24,6 +24,8 @@ public sealed unsafe class Bridge : IDisposable
     const int OffClientHeartbeat = 88, OffClientPid = 96, OffPoseFlags = 100, OffHead = 104, OffLeftGrip = 132, OffRightGrip = 160;
     const int OffLeftAim = 188, OffRightAim = 216, OffPoseSeq = 244, OffRuntime = 248, OffApp = 312;
     const int OffTriggerLeft = 376, OffTriggerRight = 380, OffCapture = 384;
+    const int OffLayerFeatures = 388;
+    const int OffCursorVisible = 392, OffCursorU = 396, OffCursorV = 400, OffCursorSize = 404;
 
     readonly MemoryMappedFile _file;
     readonly MemoryMappedViewAccessor _view;
@@ -61,6 +63,10 @@ public sealed unsafe class Bridge : IDisposable
         int end = span.IndexOf((byte)0);
         return Encoding.UTF8.GetString(end < 0 ? span : span[..end]);
     }
+
+    /// <summary>The connected layer draws the cursor as its own quad. Layers before that feature
+    /// leave the field 0, and then the cursor has to be drawn into the panel texture.</summary>
+    public bool LayerDrawsCursor => (R<uint>(OffLayerFeatures) & 1) != 0;
 
     public uint PoseSeq => Volatile.Read(ref *(uint*)(_base + OffPoseSeq));
 
@@ -107,6 +113,15 @@ public sealed unsafe class Bridge : IDisposable
 
     /// <summary>Asks the layer to take the trigger away from the game while the user points at the panel.</summary>
     public void SetCapture(bool on) => W<uint>(OffCapture, on ? 1u : 0u);
+
+    /// <summary>Where the layer draws its cursor quad, in panel fractions (0..1, top left origin).</summary>
+    public void SetCursor(bool visible, float u, float v, float sizeMeters)
+    {
+        W(OffCursorU, u);
+        W(OffCursorV, v);
+        W(OffCursorSize, sizeMeters);
+        W<uint>(OffCursorVisible, visible ? 1u : 0u);
+    }
 
     public void Haptic(Hand hand, float amplitude, float seconds)
     {

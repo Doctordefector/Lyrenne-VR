@@ -21,6 +21,10 @@ struct Pose {
 
 enum Anchor : uint32_t { AnchorLeftGrip = 0, AnchorRightGrip = 1, AnchorWorld = 2 };
 
+enum LayerFeature : uint32_t {
+    FeatureCursorQuad = 1u << 0,  // draws the cursor as its own quad from cursorU/V
+};
+
 enum PoseFlag : uint32_t {
     PoseHead = 1u << 0,
     PoseLeftGrip = 1u << 1,
@@ -64,8 +68,12 @@ struct Bridge {
     float triggerRight;        // 380
     uint32_t captureInput;     // 384 host: 1 while the user points at the panel, the layer then
                                //     takes the trigger from the game with a high-priority action set
-    uint32_t reserved2;        // 388
-    uint8_t reserved1[kPixelOffset - 392];
+    uint32_t layerFeatures;    // 388 layer: LayerFeature bits (an older layer leaves this 0)
+    uint32_t cursorVisible;    // 392 host: draw the cursor quad
+    float cursorU;             // 396 0..1 across the panel, left to right
+    float cursorV;             // 400 0..1 down the panel, top to bottom
+    float cursorSizeM;         // 404 cursor quad edge, meters
+    uint8_t reserved1[kPixelOffset - 408];
     // kPixelOffset: width * height BGRA, premultiplied alpha, tightly packed.
 };
 #pragma pack(pop)
