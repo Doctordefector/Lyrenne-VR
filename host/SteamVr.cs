@@ -26,6 +26,7 @@ public sealed class SteamVr : IDisposable
     uint _watchDevice = OpenVR.k_unTrackedDeviceIndexInvalid;
     Pose _watchDeviceFromGrip = Pose.Identity;
     bool _shown;
+    long _bindingReportAt;
 
     ID3D11Device? _device;
     ID3D11DeviceContext? _context;
@@ -92,6 +93,7 @@ public sealed class SteamVr : IDisposable
             if (RegisterWithSteamVr) RegisterManifest(dir);
             _connected = true;
             _shown = false;
+            _bindingReportAt = Environment.TickCount64 + 5000;
             Log.Write("connected to SteamVR");
             return true;
         }
@@ -157,6 +159,11 @@ public sealed class SteamVr : IDisposable
 
         var sets = new[] { new VRActiveActionSet_t { ulActionSet = _set } };
         OpenVR.Input.UpdateActionState(sets, (uint)Marshal.SizeOf<VRActiveActionSet_t>());
+        if (_bindingReportAt != 0 && Environment.TickCount64 > _bindingReportAt)
+        {
+            _bindingReportAt = 0;
+            ReportBindings();
+        }
         OpenVR.System.GetDeviceToAbsoluteTrackingPose(ETrackingUniverseOrigin.TrackingUniverseStanding, 0, _devicePoses);
 
         Pose? head = _devicePoses[0].bPoseIsValid ? ToPose(_devicePoses[0].mDeviceToAbsoluteTracking) : null;
@@ -178,6 +185,29 @@ public sealed class SteamVr : IDisposable
             _watchDevice = OpenVR.k_unTrackedDeviceIndexInvalid;
         }
         return new TrackingFrame(head, lg, rg, la, ra, Analog(_leftTrigger), Analog(_rightTrigger));
+    }
+
+    /// <summary>
+    /// Logs which physical inputs SteamVR bound each action to, once per connection. An action with
+    /// no origins is not bound on the connected controllers, which is what broke the trigger on
+    /// Virtual Desktop's controller type.
+    /// </summary>
+    void ReportBindings()
+    {
+        foreach (var (name, action) in new[] { ("left grip", _leftGrip), ("right aim", _rightAim), ("left trigger", _leftTrigger), ("right trigger", _rightTrigger) })
+        {
+            var origins = new ulong[8];
+            OpenVR.Input.GetActionOrigins(_set, action, origins);
+            var names = new List<string>();
+            foreach (var o in origins)
+            {
+                if (o == 0) continue;
+                var sb = new System.Text.StringBuilder(256);
+                OpenVR.Input.GetOriginLocalizedName(o, sb, 256, -1);
+                names.Add(sb.ToString());
+            }
+            Log.Write($"SteamVR {name}: {(names.Count == 0 ? "NOT BOUND" : string.Join(", ", names))}");
+        }
     }
 
     static float Analog(ulong action)

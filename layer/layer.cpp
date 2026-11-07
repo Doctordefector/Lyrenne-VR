@@ -27,6 +27,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -84,6 +85,8 @@ struct Dispatch {
     PFN_xrCreateActionSet CreateActionSet = nullptr;
     PFN_xrDestroyActionSet DestroyActionSet = nullptr;
     PFN_xrCreateAction CreateAction = nullptr;
+    PFN_xrPathToString PathToString = nullptr;
+    PFN_xrGetActionStateBoolean GetActionStateBoolean = nullptr;
     PFN_xrSuggestInteractionProfileBindings SuggestInteractionProfileBindings = nullptr;
     PFN_xrAttachSessionActionSets AttachSessionActionSets = nullptr;
     PFN_xrSyncActions SyncActions = nullptr;
@@ -133,6 +136,16 @@ struct State {
     XrPath leftSelectPath = XR_NULL_PATH, rightSelectPath = XR_NULL_PATH;
     volatile bool captureOn = false;
     bool loggedCapture = false;  // one log line per instance the first time the trigger is read
+
+    // The game's own actions that sit on a trigger, so the log can show whether the runtime
+    // really takes them away from the game while the panel holds the trigger.
+    struct GameAction {
+        std::string name;
+        XrActionType type;
+    };
+    std::map<XrAction, GameAction> gameActions;     // every action the game created
+    std::map<XrAction, GameAction> gameTriggers;    // the ones bound to a trigger or select
+    int captureFrames = 0;
 
     XrSession session = XR_NULL_HANDLE;
     bool attached = false;
@@ -475,6 +488,35 @@ bool Locate(XrSpace space, XrTime time, lyrenne::Pose& out) {
     return true;
 }
 
+// A few frames into each stretch where the panel holds the trigger, log whether the game's own
+// trigger actions went inactive. That is the runtime's answer to "does the game still fire".
+void ReportGameTriggers() {
+    if (!gs.captureOn) {
+        gs.captureFrames = 0;
+        return;
+    }
+    if (++gs.captureFrames != 5 || gs.gameTriggers.empty()) return;
+    for (auto& [action, info] : gs.gameTriggers) {
+        XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
+        gi.action = action;
+        XrBool32 active = XR_FALSE;
+        XrResult r = XR_ERROR_ACTION_TYPE_MISMATCH;
+        if (info.type == XR_ACTION_TYPE_BOOLEAN_INPUT) {
+            XrActionStateBoolean st{XR_TYPE_ACTION_STATE_BOOLEAN};
+            r = next.GetActionStateBoolean(gs.session, &gi, &st);
+            active = st.isActive;
+        } else if (info.type == XR_ACTION_TYPE_FLOAT_INPUT) {
+            XrActionStateFloat st{XR_TYPE_ACTION_STATE_FLOAT};
+            r = next.GetActionStateFloat(gs.session, &gi, &st);
+            active = st.isActive;
+        } else {
+            continue;
+        }
+        Log("panel holds the trigger: game action '%s' %s (result %d)", info.name.c_str(),
+            active ? "STILL ACTIVE, the game sees the trigger" : "inactive, the game is blocked", r);
+    }
+}
+
 void PublishPoses(lyrenne::Bridge* b, XrTime time) {
     uint32_t flags = 0;
     lyrenne::Pose head{}, lg{}, rg{}, la{}, ra{};
@@ -505,6 +547,7 @@ void PublishPoses(lyrenne::Bridge* b, XrTime time) {
     }
     b->triggerLeft = trig[0];
     b->triggerRight = trig[1];
+    ReportGameTriggers();
     b->clientPid = GetCurrentProcessId();
     CopyName(b->runtimeName, gs.runtimeName);
     CopyName(b->appName, gs.appName);
@@ -541,12 +584,31 @@ void DestroySessionObjects() {
 // ---------------------------------------------------------------------------------------------
 // Intercepted entry points
 
+XrResult XRAPI_CALL Hook_xrCreateAction(XrActionSet set, const XrActionCreateInfo* info, XrAction* action) {
+    XrResult r = next.CreateAction(set, info, action);
+    if (Ok(r) && gs.enabled && info && set != gs.actionSet && set != gs.captureSet) {
+        std::lock_guard<std::mutex> lock(gStateLock);
+        gs.gameActions[*action] = {info->actionName, info->actionType};
+    }
+    return r;
+}
+
 XrResult XRAPI_CALL Hook_xrSuggestInteractionProfileBindings(XrInstance instance, const XrInteractionProfileSuggestedBinding* suggested) {
     if (!gs.enabled || gs.actionSet == XR_NULL_HANDLE || !suggested) return next.SuggestInteractionProfileBindings(instance, suggested);
 
     // Add our pose (and, where the profile has one, haptic) bindings to whatever the game suggests,
     // so our action set works on exactly the controllers the game supports. Never suggest a profile
     // on our own: that could make the runtime pick a profile the game has no bindings for.
+    for (uint32_t i = 0; i < suggested->countSuggestedBindings; i++) {
+        const auto& sb = suggested->suggestedBindings[i];
+        char path[XR_MAX_PATH_LENGTH];
+        uint32_t len = 0;
+        if (!Ok(next.PathToString(instance, sb.binding, sizeof(path), &len, path))) continue;
+        if (!strstr(path, "/input/trigger") && !strstr(path, "/input/select")) continue;
+        auto it = gs.gameActions.find(sb.action);
+        if (it != gs.gameActions.end()) gs.gameTriggers[sb.action] = it->second;
+    }
+
     // Most controllers have an analog trigger; the simple controller and some others only "select".
     std::vector<XrActionSuggestedBinding> poses(suggested->suggestedBindings,
                                                suggested->suggestedBindings + suggested->countSuggestedBindings);
@@ -749,6 +811,7 @@ XrResult XRAPI_CALL Hook_xrGetInstanceProcAddr(XrInstance instance, const char* 
         HOOK(xrSuggestInteractionProfileBindings)
         HOOK(xrAttachSessionActionSets)
         HOOK(xrSyncActions)
+        HOOK(xrCreateAction)
         HOOK(xrCreateSession)
         HOOK(xrDestroySession)
         HOOK(xrEndFrame)
@@ -846,6 +909,8 @@ bool LoadDispatch(XrInstance instance) {
     LOAD(AttachSessionActionSets)
     LOAD(SyncActions)
     LOAD(GetActionStateFloat)
+    LOAD(GetActionStateBoolean)
+    LOAD(PathToString)
     LOAD(ApplyHapticFeedback)
     LOAD(CreateSession)
     LOAD(DestroySession)
