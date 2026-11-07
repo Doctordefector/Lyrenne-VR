@@ -190,34 +190,28 @@ public sealed class Wrist
             return;
         }
         float hw = PanelWidth / 2, hh = PanelHeight / 2;
-
-        // Finger touch: the controller tip near the panel face.
         Vector3 tip = p.InverseTransform(aim.Transform(new Vector3(0, 0, -_settings.FingertipCm / 100f)));
-        bool tipOver = MathF.Abs(tip.X) <= hw + 0.01f && MathF.Abs(tip.Y) <= hh + 0.01f;
-        if (tipOver && tip.Z <= HoverDepth && tip.Z >= PassThrough && !_triggerDown)
-        {
-            Pointing = false;
-            _panel.InputKind = "touch";
-            if (!_touching && tip.Z <= PressDepth) _touching = true;
-            else if (_touching && tip.Z >= ReleaseDepth) _touching = false;
-            _panel.Pointer(ToPixel(tip, hw, hh), Math.Clamp(tip.Z / HoverDepth, 0, 1), _touching);
-            return;
-        }
-        _touching = false;
-
-        // Laser: the poking hand's aim ray hits the panel, the trigger clicks.
         Vector3 origin = p.InverseTransform(aim.Position);
         Vector3 dir = Vector3.Transform(aim.Forward, Quaternion.Inverse(p.Rotation));
-        bool hit = false;
-        Vector3 at = default;
-        if (origin.Z > 0 && dir.Z < -0.15f)
+
+        // One cursor, always where the aim ray crosses the panel. Touch only decides when a press
+        // happens. (It used to move the cursor to the tip's straight-down projection, which sits
+        // centimetres away from the ray's crossing whenever the controller is at a slant, so the
+        // cursor jumped every time the tip crossed into the touch zone.)
+        bool tipNear = MathF.Abs(tip.X) <= hw + 0.01f && MathF.Abs(tip.Y) <= hh + 0.01f && tip.Z <= HoverDepth && tip.Z >= PassThrough;
+        bool aimedAt = origin.Z > -0.02f && dir.Z < -0.15f;
+        Vector3 at = aimedAt ? origin + dir * (-origin.Z / dir.Z) : default;
+        bool onPanel = aimedAt && -origin.Z / dir.Z < 2f && MathF.Abs(at.X) <= hw + 0.02f && MathF.Abs(at.Y) <= hh + 0.02f;
+        if (!onPanel && tipNear)
         {
-            float t = -origin.Z / dir.Z;
-            at = origin + dir * t;
-            hit = t < 2f && MathF.Abs(at.X) <= hw + 0.02f && MathF.Abs(at.Y) <= hh + 0.02f;
+            // Poking side-on with the controller pointing past the panel: fall back to the tip.
+            at = tip with { Z = 0 };
+            onPanel = true;
         }
-        // Keep a drag going when the ray slides off the edge with the trigger held.
-        if (!hit && !(_triggerDown && origin.Z > 0 && dir.Z < 0))
+        // Keep a drag going when the ray slides off the edge with the button held.
+        bool holding = (_triggerDown || _touching) && origin.Z > -0.05f && dir.Z < 0;
+        if (!onPanel && holding) at = origin + dir * (-origin.Z / dir.Z);
+        if (!onPanel && !holding)
         {
             Diagnose($"laser off panel (aim {origin.Z * 100:0} cm in front, pointing {(dir.Z < -0.15f ? "at" : "away from")} it, " +
                      $"hit at {at.X * 100:0.0},{at.Y * 100:0.0} cm), fingertip {tip.Z * 100:0.0} cm from face, trigger {f.Trigger(_settings.PokeHand):0.00}");
@@ -226,7 +220,7 @@ public sealed class Wrist
         }
 
         float trigger = f.Trigger(_settings.PokeHand);
-        Diagnose($"laser on panel, trigger {trigger:0.00}");
+        Diagnose($"laser on panel, trigger {trigger:0.00}, fingertip {tip.Z * 100:0.0} cm from face");
         long now = Environment.TickCount64;
         var raw = ToPixel(at, hw, hh, clamp: false);
         if (!Pointing)
@@ -243,19 +237,25 @@ public sealed class Wrist
         _trail.Enqueue((now, steady));
         while (_trail.Count > 0 && now - _trail.Peek().At > 250) _trail.Dequeue();
 
-        _panel.InputKind = "trigger";
+        // Two ways to press: pull the trigger, or push the controller tip through the panel face.
+        bool wasDown = _triggerDown || _touching;
         if (!_armed && trigger < TriggerUp) _armed = true;
-        bool wasDown = _triggerDown;
         if (_armed && !_triggerDown && trigger >= TriggerDown) _triggerDown = true;
         else if (_triggerDown && trigger < TriggerUp) _triggerDown = false;
+        if (!tipNear) _touching = false;
+        else if (!_touching && tip.Z <= PressDepth) _touching = true;
+        else if (_touching && tip.Z >= ReleaseDepth) _touching = false;
+        bool down = _triggerDown || _touching;
+        _panel.InputKind = _touching ? "touch" : "trigger";
 
         // Squeezing a trigger rolls the controller a little, which drags the laser off what it was
         // on. Press where the pointer was just before the squeeze started.
         var point = steady;
-        if (_triggerDown && !wasDown)
+        if (down && !wasDown)
             foreach (var (t, earlier) in _trail)
                 if (now - t <= ClickLookbackMs) { point = earlier; break; }
-        _panel.Pointer(Clamp(point), 0.5f, _triggerDown);
+        float depth = tipNear ? Math.Clamp(tip.Z / HoverDepth, 0, 1) : 0.5f;
+        _panel.Pointer(Clamp(point), depth, down);
     }
 
     const long ClickLookbackMs = 120;

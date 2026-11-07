@@ -25,7 +25,7 @@ if ($Test) {
     $hostProc = Start-Process $exe -ArgumentList '--always' -PassThru
     try {
         Start-Sleep 3
-        foreach ($api in 'd3d11', 'd3d12') {
+        foreach ($api in 'd3d11', 'd3d12', 'd3d11-deadclick') {
             & (Join-Path $root 'build\test\xrtest.exe') $api (Join-Path $root "build\test\$api.bmp") | Out-Host
             if ($LASTEXITCODE) { throw "OpenXR $api test failed" }
         }

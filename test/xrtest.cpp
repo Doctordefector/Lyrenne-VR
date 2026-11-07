@@ -116,6 +116,9 @@ int main(int argc, char** argv) {
     bool d3d12 = argc > 1 && strstr(argv[1], "d3d12") != nullptr;
     // real-d3d11 / real-d3d12: a full session on the machine's actual runtime with all its layers.
     bool real = argc > 1 && strncmp(argv[1], "real-", 5) == 0;
+    // d3d11-deadclick: the runtime never reports the layer's click action active.
+    bool deadClick = argc > 1 && strstr(argv[1], "deadclick") != nullptr;
+    if (deadClick) SetEnvironmentVariableW(L"LYRENNE_MOCK_DEAD_CLICK", L"1");
     const char* out = argc > 2 ? argv[2] : "xrtest.bmp";
 
     HMODULE mock = GetModuleHandleW(nullptr);
@@ -325,6 +328,25 @@ int main(int argc, char** argv) {
     Expect(v[1] == 2 + 8, "game binding kept and our 4 poses, 2 haptics and 2 triggers appended");
     Expect(v[2] == 3, "our pose set and click set attached alongside the game's");
     Expect(v[11] == 3, "pointing at the panel switched the click set on");
+    if (deadClick) {
+        Expect(v[3] == 2, "with a dead click action the layer stops taking the trigger from the game");
+        // The layer says so in its log.
+        wchar_t logPath[MAX_PATH];
+        ExpandEnvironmentStringsW(L"%LOCALAPPDATA%\\LyrenneVR\\layer.log", logPath, MAX_PATH);
+        FILE* lf = nullptr;
+        bool fellBack = false;
+        if (!_wfopen_s(&lf, logPath, L"r") && lf) {
+            char line[512];
+            DWORD pid = GetCurrentProcessId();
+            char tag[32];
+            sprintf_s(tag, "[%lu] click action never", pid);
+            while (fgets(line, sizeof(line), lf)) fellBack |= strstr(line, tag) != nullptr;
+            fclose(lf);
+        }
+        Expect(fellBack, "the layer logged that it fell back to the game's own trigger");
+    } else {
+        Expect(v[3] == 3, "a working click action keeps the trigger while pointing");
+    }
     Expect(v[10] > 0, "the layer read the trigger while pointing");
     Expect(v[5] > 0, "panel quad composited");
     Expect(strcmp(space, "hand_grip /user/hand/left") == 0, "quad locked to the left grip");

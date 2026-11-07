@@ -16,6 +16,7 @@
 #include <openxr/openxr_loader_negotiation.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <string>
@@ -176,9 +177,13 @@ XrResult XRAPI_CALL GetActionStateBoolean(XrSession, const XrActionStateGetInfo*
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL GetActionStateFloat(XrSession, const XrActionStateGetInfo* gi, XrActionStateFloat* s) {
-    if (gActions[gi->action].name == "panel_click") gRecord.clickReads++;
+    bool click = gActions[gi->action].name == "panel_click";
+    if (click) gRecord.clickReads++;
     s->currentState = 0;  // never actually click: that would toggle the real media player
-    s->isActive = XR_TRUE;
+    // LYRENNE_MOCK_DEAD_CLICK: behave like Hard Bullet on VDXR, where the layer's click action
+    // never reported active even though it held the trigger.
+    static const bool dead = getenv("LYRENNE_MOCK_DEAD_CLICK") != nullptr;
+    s->isActive = click && dead ? XR_FALSE : XR_TRUE;
     return XR_SUCCESS;
 }
 XrResult XRAPI_CALL ApplyHaptic(XrSession, const XrHapticActionInfo*, const XrHapticBaseHeader*) {

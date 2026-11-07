@@ -1,4 +1,5 @@
 using System.Numerics;
+using SkiaSharp;
 
 namespace LyrenneVR;
 
@@ -165,6 +166,29 @@ static class SelfTest
         Expect(taps == 7 && last == "Play", $"the click lands where the laser was before the squeeze (got {last})");
         trigger = 0;
         Run(head, farPoker, 30);
+
+        // Slant: aim at play from 45 degrees off, sliding in from 30 cm to 9 cm away. The tip enters
+        // the touch zone on the way, but the cursor must stay on the ray's crossing point.
+        {
+            float w = settings.PanelWidthM, h = w * Panel.Height / Panel.Width;
+            var target = panelWorld.Transform(new Vector3((play.X / Panel.Width - 0.5f) * w, (0.5f - play.Y / Panel.Height) * h, 0));
+            var side = Vector3.Normalize(Vector3.Cross(normal, Vector3.UnitY));
+            var slant = Vector3.Normalize(normal + side);
+            int clicksBefore = taps;
+            var jumps = new List<float>();
+            SKPoint? lastCursor = null;
+            Action<SKPoint?> track = c => { if (lastCursor is { } l && c is { } n) jumps.Add(SKPoint.Distance(l, n)); lastCursor = c; };
+            panel.CursorMoved += track;
+            for (float d = 0.30f; d >= 0.09f; d -= 0.01f)
+            {
+                var from = target + slant * d;
+                Run(head, new Pose(from, LookRotation(target - from)), 12);
+            }
+            panel.CursorMoved -= track;
+            float worst = jumps.Count > 0 ? jumps.Max() : 0;
+            Expect(worst < 25 && taps == clicksBefore, $"a slanted controller moving in keeps the cursor still (biggest jump {worst:0} px)");
+            Run(head, farPoker, 30);
+        }
 
         Run(awayHead, farPoker, 150);
         Expect(wrist.Visible, "stays open through a short look away");

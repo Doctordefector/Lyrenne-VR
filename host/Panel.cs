@@ -103,8 +103,12 @@ public sealed class Panel
     /// Feeds the pointer. <paramref name="at"/> is null when nothing hovers. <paramref name="depth"/> is
     /// 0 when touching and 1 at the edge of the hover zone; it only shapes the cursor.
     /// </summary>
+    /// <summary>The cursor moved (null when it left the panel). Used by the self-test.</summary>
+    public event Action<SKPoint?>? CursorMoved;
+
     public void Pointer(SKPoint? at, float depth, bool pressed)
     {
+        if (at != _hover) CursorMoved?.Invoke(at);
         _hover = at;
         _hoverDepth = Math.Clamp(depth, 0, 1);
 

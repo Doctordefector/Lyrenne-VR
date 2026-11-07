@@ -135,17 +135,23 @@ struct State {
     XrPath leftTriggerPath = XR_NULL_PATH, rightTriggerPath = XR_NULL_PATH;
     XrPath leftSelectPath = XR_NULL_PATH, rightSelectPath = XR_NULL_PATH;
     volatile bool captureOn = false;
-    bool loggedCapture = false;  // one log line per instance the first time the trigger is read
 
     // The game's own actions that sit on a trigger, so the log can show whether the runtime
     // really takes them away from the game while the panel holds the trigger.
     struct GameAction {
         std::string name;
         XrActionType type;
+        bool left = false, right = false;  // bound on that hand
+        bool pull = false;                 // to a value or click, not just a touch sensor
     };
     std::map<XrAction, GameAction> gameActions;     // every action the game created
     std::map<XrAction, GameAction> gameTriggers;    // the ones bound to a trigger or select
     int captureFrames = 0;
+    // Seen in Hard Bullet on VDXR: the click set took the trigger from the game, yet its own action
+    // read inactive, so the trigger reached nobody. When that happens the layer stops taking the
+    // trigger for the rest of the session and reads the game's own trigger actions instead.
+    bool clickSeen = false;
+    bool captureBroken = false;
 
     XrSession session = XR_NULL_HANDLE;
     bool attached = false;
@@ -488,6 +494,66 @@ bool Locate(XrSpace space, XrTime time, lyrenne::Pose& out) {
     return true;
 }
 
+float ReadFloat(XrAction action, XrPath subaction, XrActionType type, bool* active) {
+    XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
+    gi.action = action;
+    gi.subactionPath = subaction;
+    *active = false;
+    if (type == XR_ACTION_TYPE_BOOLEAN_INPUT) {
+        XrActionStateBoolean st{XR_TYPE_ACTION_STATE_BOOLEAN};
+        if (!Ok(next.GetActionStateBoolean(gs.session, &gi, &st))) return 0;
+        *active = st.isActive;
+        return st.isActive && st.currentState ? 1.0f : 0.0f;
+    }
+    XrActionStateFloat st{XR_TYPE_ACTION_STATE_FLOAT};
+    if (!Ok(next.GetActionStateFloat(gs.session, &gi, &st))) return 0;
+    *active = st.isActive;
+    return st.isActive ? st.currentState : 0.0f;
+}
+
+// The trigger for each hand while the user points at the panel.
+void ReadTrigger(float trig[2]) {
+    if (!gs.attached || !gs.captureOn) return;
+    XrPath hands[2] = {gs.leftHand, gs.rightHand};
+
+    if (!gs.captureBroken && gs.clickAction != XR_NULL_HANDLE) {
+        bool any = false, act[2] = {false, false}, nullAct = false;
+        for (int i = 0; i < 2; i++) {
+            trig[i] = ReadFloat(gs.clickAction, hands[i], XR_ACTION_TYPE_FLOAT_INPUT, &act[i]);
+            any |= act[i];
+        }
+        float both = 0;
+        if (!any) {
+            // Some runtimes only answer for the whole action rather than per hand.
+            both = ReadFloat(gs.clickAction, XR_NULL_PATH, XR_ACTION_TYPE_FLOAT_INPUT, &nullAct);
+            if (nullAct) trig[0] = trig[1] = both;
+        }
+        if (gs.captureFrames == 5)
+            Log("click action: left active %d (%.2f), right active %d (%.2f), whole action active %d (%.2f)",
+                act[0], trig[0], act[1], trig[1], nullAct, both);
+        if (any || nullAct) {
+            gs.clickSeen = true;
+        } else if (gs.captureFrames > 15 && !gs.clickSeen) {
+            gs.captureBroken = true;
+            Log("click action never became active on this runtime and game; falling back to the game's own trigger "
+                "actions (the game will also see panel clicks)");
+        }
+        return;
+    }
+
+    // Fallback: the game's own trigger actions, which are active again now that nothing takes them.
+    for (auto& [action, info] : gs.gameTriggers) {
+        if (!info.pull) continue;
+        for (int i = 0; i < 2; i++) {
+            if (!(i ? info.right : info.left)) continue;
+            bool active = false;
+            float v = ReadFloat(action, hands[i], info.type, &active);
+            if (!active) v = ReadFloat(action, XR_NULL_PATH, info.type, &active);  // action without per-hand paths
+            if (active) trig[i] = std::max(trig[i], v);
+        }
+    }
+}
+
 // A few frames into each stretch where the panel holds the trigger, log whether the game's own
 // trigger actions went inactive. That is the runtime's answer to "does the game still fire".
 void ReportGameTriggers() {
@@ -495,7 +561,7 @@ void ReportGameTriggers() {
         gs.captureFrames = 0;
         return;
     }
-    if (++gs.captureFrames != 5 || gs.gameTriggers.empty()) return;
+    if (++gs.captureFrames != 5 || gs.gameTriggers.empty() || gs.captureBroken) return;
     for (auto& [action, info] : gs.gameTriggers) {
         XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
         gi.action = action;
@@ -532,19 +598,7 @@ void PublishPoses(lyrenne::Bridge* b, XrTime time) {
     b->rightAim = ra;
     b->poseFlags = flags;
     float trig[2] = {0, 0};
-    if (gs.attached && gs.captureOn && gs.clickAction != XR_NULL_HANDLE) {
-        XrPath hands[2] = {gs.leftHand, gs.rightHand};
-        for (int i = 0; i < 2; i++) {
-            XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
-            gi.action = gs.clickAction;
-            gi.subactionPath = hands[i];
-            XrActionStateFloat st{XR_TYPE_ACTION_STATE_FLOAT};
-            XrResult r = next.GetActionStateFloat(gs.session, &gi, &st);
-            if (Ok(r) && st.isActive) trig[i] = st.currentState;
-            if (!gs.loggedCapture) Log("click action %s: result %d, active %d", i ? "right" : "left", r, st.isActive);
-        }
-        gs.loggedCapture = true;
-    }
+    ReadTrigger(trig);
     b->triggerLeft = trig[0];
     b->triggerRight = trig[1];
     ReportGameTriggers();
@@ -606,7 +660,11 @@ XrResult XRAPI_CALL Hook_xrSuggestInteractionProfileBindings(XrInstance instance
         if (!Ok(next.PathToString(instance, sb.binding, sizeof(path), &len, path))) continue;
         if (!strstr(path, "/input/trigger") && !strstr(path, "/input/select")) continue;
         auto it = gs.gameActions.find(sb.action);
-        if (it != gs.gameActions.end()) gs.gameTriggers[sb.action] = it->second;
+        if (it == gs.gameActions.end()) continue;
+        auto& g = gs.gameTriggers.emplace(sb.action, it->second).first->second;
+        if (strstr(path, "/user/hand/left")) g.left = true;
+        if (strstr(path, "/user/hand/right")) g.right = true;
+        if (!strstr(path, "/touch")) g.pull = true;
     }
 
     // Most controllers have an analog trigger; the simple controller and some others only "select".
@@ -682,7 +740,7 @@ XrResult XRAPI_CALL Hook_xrSyncActions(XrSession session, const XrActionsSyncInf
     if (!gs.attached || session != gs.session || !info) return next.SyncActions(session, info);
     std::vector<XrActiveActionSet> active(info->activeActionSets, info->activeActionSets + info->countActiveActionSets);
     active.push_back({gs.actionSet, XR_NULL_PATH});
-    if (gs.captureOn && gs.captureSet != XR_NULL_HANDLE) active.push_back({gs.captureSet, XR_NULL_PATH});
+    if (gs.captureOn && !gs.captureBroken && gs.captureSet != XR_NULL_HANDLE) active.push_back({gs.captureSet, XR_NULL_PATH});
     XrActionsSyncInfo copy = *info;
     copy.countActiveActionSets = static_cast<uint32_t>(active.size());
     copy.activeActionSets = active.data();
