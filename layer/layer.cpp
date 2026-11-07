@@ -572,6 +572,8 @@ XrResult XRAPI_CALL Hook_xrSuggestInteractionProfileBindings(XrInstance instance
         XrResult r = next.SuggestInteractionProfileBindings(instance, &copy);
         if (Ok(r)) {
             gs.bindingsAccepted = true;
+            Log("bindings for profile %llu: game %u + ours %zu", static_cast<unsigned long long>(suggested->interactionProfile),
+                suggested->countSuggestedBindings, list.size() - suggested->countSuggestedBindings);
             return r;
         }
     }
