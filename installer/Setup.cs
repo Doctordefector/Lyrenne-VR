@@ -15,13 +15,15 @@ namespace LyrenneVR.Setup;
 /// LyrenneVR-Setup.exe. Installs, upgrades and uninstalls Lyrenne VR:
 ///   (no args)        the install window
 ///   /S               install silently
+///   /D=<folder>      install there instead (default: where it is already installed, else Program Files)
 ///   /uninstall [/S]  remove everything (the copy in the install folder is the uninstaller)
 /// </summary>
 static class Program
 {
     public const string AppName = "Lyrenne VR";
     public const string Version = "1.1.0";
-    public static readonly string InstallDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), AppName);
+    static readonly string DefaultDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), AppName);
+    public static string InstallDir = DefaultDir;
     public static string AppExe => Path.Combine(InstallDir, "LyrenneVR.exe");
     public static string LayerJson => Path.Combine(InstallDir, "layer", "XR_APILAYER_LYRENNE_wrist_player.json");
 
@@ -37,6 +39,10 @@ static class Program
     {
         bool silent = args.Any(a => a.Equals("/S", StringComparison.OrdinalIgnoreCase));
         bool uninstall = args.Any(a => a.Equals("/uninstall", StringComparison.OrdinalIgnoreCase));
+        string? chosen = args.FirstOrDefault(a => a.StartsWith("/D=", StringComparison.OrdinalIgnoreCase))?.Substring(3).Trim('"');
+        if (uninstall) InstallDir = Path.GetDirectoryName(SelfPath)!;  // remove the copy this uninstaller sits in
+        else if (!string.IsNullOrWhiteSpace(chosen)) InstallDir = Path.GetFullPath(chosen).TrimEnd(Path.DirectorySeparatorChar);
+        else if (InstalledDir() is { } existing) InstallDir = existing;  // upgrades stay where they are
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
@@ -93,6 +99,8 @@ static class Program
     {
         status("Closing Lyrenne VR if it is running...");
         StopApp();
+
+        string? previous = InstalledDir();
 
         status("Copying files...");
         Directory.CreateDirectory(InstallDir);
@@ -153,7 +161,21 @@ static class Program
         }
 
         RemoveLegacyInstall();
+        // Moved to another folder: the old copy goes, but only if it really is one of ours.
+        if (previous != null && !previous.Equals(InstallDir, StringComparison.OrdinalIgnoreCase)
+            && File.Exists(Path.Combine(previous, "LyrenneVR.exe")) && File.Exists(Path.Combine(previous, "Uninstall.exe")))
+        {
+            status("Removing the copy in " + previous + "...");
+            try { Directory.Delete(previous, recursive: true); } catch (Exception) { /* in use; harmless leftovers */ }
+        }
         status("Done.");
+    }
+
+    /// <summary>The folder of the current install, from its Apps entry, or null.</summary>
+    static string? InstalledDir()
+    {
+        using var u = Registry.LocalMachine.OpenSubKey(UninstallKey);
+        return u?.GetValue("InstallLocation") is string dir && Directory.Exists(dir) ? dir.TrimEnd(Path.DirectorySeparatorChar) : null;
     }
 
     public static string SelfPath => Process.GetCurrentProcess().MainModule!.FileName;
