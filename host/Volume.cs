@@ -15,12 +15,20 @@ public sealed class Volume
 
     public bool IsAppVolume => _session != null;
 
+    /// <summary>
+    /// Lyrenne's volume slider is not linear in the mixer: its fader sends amplitude v^1.43
+    /// (FADER_LOUDNESS in Lyrenne's DesktopPlayer.kt). Reading and writing Lyrenne's session through
+    /// the same curve keeps this slider and the desktop one on the same number.
+    /// </summary>
+    const float LyrenneFader = 1.43f;
+    const float LyrenneMuteBelow = 0.02f;
+
     public float Get()
     {
         try
         {
             Refresh();
-            if (_session != null) { _session.GetMasterVolume(out float v); return v; }
+            if (_session != null) { _session.GetMasterVolume(out float v); return MathF.Pow(Math.Clamp(v, 0f, 1f), 1f / LyrenneFader); }
             if (_endpoint != null) { _endpoint.GetMasterVolumeLevelScalar(out float v); return v; }
         }
         catch (COMException)
@@ -37,7 +45,7 @@ public sealed class Volume
         {
             Refresh();
             var ctx = Guid.Empty;
-            if (_session != null) _session.SetMasterVolume(value, ref ctx);
+            if (_session != null) _session.SetMasterVolume(value <= LyrenneMuteBelow ? 0f : MathF.Pow(value, LyrenneFader), ref ctx);
             else _endpoint?.SetMasterVolumeLevelScalar(value, ref ctx);
         }
         catch (COMException)

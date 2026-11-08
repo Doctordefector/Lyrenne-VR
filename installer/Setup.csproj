@@ -15,7 +15,7 @@
     <!-- Built first without the payload: the small Uninstall.exe that ships inside the app. -->
     <AssemblyName Condition="'$(Uninstaller)' == 'true'">Uninstall</AssemblyName>
     <RootNamespace>LyrenneVR.Setup</RootNamespace>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Product>Lyrenne VR</Product>
     <Company>Lyrenne</Company>
     <Description>Lyrenne VR installer</Description>

@@ -22,7 +22,7 @@ if ($Test) {
     & $exe --selftest | Out-Host
     if ($LASTEXITCODE) { throw 'self-test failed' }
     Get-Process LyrenneVR -ErrorAction SilentlyContinue | Stop-Process -Force
-    $hostProc = Start-Process $exe -ArgumentList '--always' -PassThru
+    $hostProc = Start-Process $exe -ArgumentList '--always', '--defaults' -PassThru
     try {
         Start-Sleep 3
         foreach ($api in 'd3d11', 'd3d12', 'd3d11-deadclick') {

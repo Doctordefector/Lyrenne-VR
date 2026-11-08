@@ -44,6 +44,10 @@ public sealed class Settings
     public bool Lyrics { get; set; } = true;
     /// <summary>Only follow Lyrenne's media session instead of whatever Windows considers current.</summary>
     public bool LyrenneOnly { get; set; } = false;
+    /// <summary>With <see cref="LyrenneOnly"/> on, start Lyrenne desktop alongside Lyrenne VR if it is not running.</summary>
+    public bool LaunchLyrenne { get; set; } = true;
+    /// <summary>Where Lyrenne desktop was last seen running, for when its Start Menu shortcut is gone.</summary>
+    public string? LyrennePath { get; set; }
     public bool SteamVrAutoLaunch { get; set; } = true;
 
     /// <summary>Overrides <see cref="Show"/> for this run only (--always on the command line, used by tests).</summary>
@@ -114,8 +118,12 @@ public sealed class Settings
         return new Settings();
     }
 
+    /// <summary>--defaults: a throwaway set for tests, never written over the user's file.</summary>
+    [JsonIgnore] public bool Ephemeral { get; set; }
+
     public void Save()
     {
+        if (Ephemeral) return;
         try
         {
             System.IO.Directory.CreateDirectory(Directory);

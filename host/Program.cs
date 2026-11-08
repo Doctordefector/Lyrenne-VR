@@ -32,12 +32,14 @@ static class Program
         }
 
         ApplicationConfiguration.Initialize();
-        var settings = Settings.Load();
+        // --defaults: tests must not see the user's hand, offsets or toggles, nor overwrite them.
+        var settings = args.Contains("--defaults") ? new Settings { Ephemeral = true } : Settings.Load();
         if (args.Contains("--always")) settings.ForceShow = ShowMode.Always;
         if (args.Contains("--capture")) settings.ForceCapture = true;
         using var host = new Host(settings);
         host.Start();
         Log.Write($"LyrenneVR started ({string.Join(' ', args)})");
+        if (!args.Contains("--always")) DesktopLauncher.StartIfWanted(settings);
         using var tray = new Tray(host);
         if (args.Contains("--preview")) tray.ShowPreview();
         Application.Run();
@@ -242,7 +244,19 @@ sealed class Tray : IDisposable
         menu.Items.Add(Toggle("Press by touching the panel too (not just the trigger)", () => s.TouchToPress, v => s.TouchToPress = v));
         menu.Items.Add(Toggle("Synced lyrics", () => s.Lyrics, v => s.Lyrics = v));
         menu.Items.Add(Toggle("Tap feedback (vibration)", () => s.Haptics, v => s.Haptics = v));
-        menu.Items.Add(Toggle("Only follow Lyrenne", () => s.LyrenneOnly, v => s.LyrenneOnly = v));
+        var launch = Toggle("Start Lyrenne desktop with Lyrenne VR", () => s.LaunchLyrenne, v =>
+        {
+            s.LaunchLyrenne = v;
+            DesktopLauncher.StartIfWanted(s);
+        });
+        launch.Enabled = s.LyrenneOnly;
+        menu.Items.Add(Toggle("Only follow Lyrenne", () => s.LyrenneOnly, v =>
+        {
+            s.LyrenneOnly = v;
+            launch.Enabled = v;
+            DesktopLauncher.StartIfWanted(s);
+        }));
+        menu.Items.Add(launch);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(Toggle("Start with Windows", StartsWithWindows, SetStartWithWindows));
         menu.Items.Add(Toggle("Start with SteamVR", () => s.SteamVrAutoLaunch, v =>

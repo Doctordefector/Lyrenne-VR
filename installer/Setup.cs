@@ -20,7 +20,7 @@ namespace LyrenneVR.Setup;
 static class Program
 {
     public const string AppName = "Lyrenne VR";
-    public const string Version = "1.0.0";
+    public const string Version = "1.1.0";
     public static readonly string InstallDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), AppName);
     public static string AppExe => Path.Combine(InstallDir, "LyrenneVR.exe");
     public static string LayerJson => Path.Combine(InstallDir, "layer", "XR_APILAYER_LYRENNE_wrist_player.json");
