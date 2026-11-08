@@ -4,8 +4,9 @@ namespace LyrenneVR;
 
 /// <summary>
 /// Starts Lyrenne desktop when Lyrenne VR is set to follow only Lyrenne, so one launch brings up both.
-/// Finds it through the Start Menu shortcut Lyrenne repoints at itself on every launch, then the path
-/// it was last seen running from, then the usual Scoop install.
+/// Uses the saved <see cref="Settings.LyrennePath"/> first. It is filled once, from the first copy
+/// seen running, and never overwritten after, so a dev build run later cannot take it over. Without
+/// it: the Start Menu shortcut (which every Lyrenne launch repoints at itself), then Scoop.
 /// </summary>
 static class DesktopLauncher
 {
@@ -21,7 +22,7 @@ static class DesktopLauncher
             {
                 if (RunningPath() is { } running)
                 {
-                    if (settings.LyrennePath != running) { settings.LyrennePath = running; settings.Save(); }
+                    if (string.IsNullOrEmpty(settings.LyrennePath) && running.Length > 0) { settings.LyrennePath = running; settings.Save(); }
                     return;
                 }
                 string? exe = Find(settings);
@@ -60,9 +61,9 @@ static class DesktopLauncher
 
     static string? Find(Settings settings)
     {
+        if (!string.IsNullOrEmpty(settings.LyrennePath) && File.Exists(settings.LyrennePath)) return settings.LyrennePath;
         string lnk = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs), "Lyrenne.lnk");
         if (File.Exists(lnk) && ShortcutTarget(lnk) is { } target && File.Exists(target)) return target;
-        if (!string.IsNullOrEmpty(settings.LyrennePath) && File.Exists(settings.LyrennePath)) return settings.LyrennePath;
         string scoop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), @"scoop\apps\lyrenne\current\Lyrenne.exe");
         return File.Exists(scoop) ? scoop : null;
     }

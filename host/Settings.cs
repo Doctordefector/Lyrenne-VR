@@ -46,7 +46,8 @@ public sealed class Settings
     public bool LyrenneOnly { get; set; } = false;
     /// <summary>With <see cref="LyrenneOnly"/> on, start Lyrenne desktop alongside Lyrenne VR if it is not running.</summary>
     public bool LaunchLyrenne { get; set; } = true;
-    /// <summary>Where Lyrenne desktop was last seen running, for when its Start Menu shortcut is gone.</summary>
+    /// <summary>The Lyrenne desktop to start. Filled from the first copy seen running, then kept:
+    /// edit settings.json to point it elsewhere.</summary>
     public string? LyrennePath { get; set; }
     public bool SteamVrAutoLaunch { get; set; } = true;
 
